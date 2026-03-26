@@ -8,7 +8,7 @@ use tracing::{Instrument, Level, event, info_span};
 
 use reqwest::header::{HeaderMap, HeaderName};
 
-use crate::source::{DefaultMetadata, Feed, LlmComprehendable};
+use crate::source::{DefaultMetadata, Feed, LlmComprehendable, get_content_as_llm_context};
 
 pub struct RssFeed {
     url: String,
@@ -90,36 +90,11 @@ impl LlmRssItem {
         let span = info_span!("llm_rss_item.from_item");
         let json = serde_json::to_string(&item)?;
 
-        async fn get_content(
-            url: &str,
-            client: &reqwest::Client,
-        ) -> Result<(Option<DynamicImage>, Option<String>), Error> {
-            let mut extra_image = None;
-            let mut extra_text = None;
-
-            let response = client.get(url).send().await?;
-            if response.status().is_success()
-                && let Some(content_type) = response.headers().get("content-type")
-                && let Ok(content_type) = content_type.to_str()
-            {
-                event!(Level::INFO, "Got extra content, attaching to struct");
-                event!(Level::DEBUG, "Content type {}", content_type);
-                if content_type.starts_with("text/") {
-                    extra_text = Some(response.text().await?);
-                } else if content_type.starts_with("image/") {
-                    extra_image = Some(image::load_from_memory(response.bytes().await?.as_ref())?);
-                } else {
-                    event!(Level::WARN, "Unsupported content type, ignoring");
-                }
-            }
-            Ok((extra_image, extra_text))
-        }
-
         async move {
             let (extra_image, extra_text) = if let Some(content) = item.content() {
                 if content.starts_with("http://") || content.starts_with("https://") {
                     event!(Level::DEBUG, "Getting content from url {}", content);
-                    get_content(content, client).await?
+                    get_content_as_llm_context::<Error>(content, client).await?
                 } else {
                     (None, Some(content.to_string()))
                 }

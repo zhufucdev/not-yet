@@ -1,4 +1,5 @@
 use escaping::Escape;
+use image::DynamicImage;
 use llama_runner::ImageOrText;
 use serde::Serialize;
 use smol_str::SmolStr;
@@ -6,6 +7,7 @@ use smol_str::SmolStr;
 mod rss;
 
 pub use rss::RssFeed;
+use tracing::{Level, event};
 
 pub trait LlmComprehendable {
     fn get_message(&self) -> Vec<ImageOrText>;
@@ -134,4 +136,32 @@ impl LlmComprehendable for DefaultMetadata {
     fn get_message(&self) -> Vec<ImageOrText> {
         vec![ImageOrText::Text(self.msg.as_str())]
     }
+}
+
+async fn get_content_as_llm_context<E>(
+    url: &str,
+    client: &reqwest::Client,
+) -> Result<(Option<DynamicImage>, Option<String>), E>
+where
+    E: From<reqwest::Error> + From<image::ImageError>,
+{
+    let mut extra_image = None;
+    let mut extra_text = None;
+
+    let response = client.get(url).send().await?;
+    if response.status().is_success()
+        && let Some(content_type) = response.headers().get("content-type")
+        && let Ok(content_type) = content_type.to_str()
+    {
+        event!(Level::INFO, "Got extra content, attaching to struct");
+        event!(Level::DEBUG, "Content type {}", content_type);
+        if content_type.starts_with("text/") {
+            extra_text = Some(response.text().await?);
+        } else if content_type.starts_with("image/") {
+            extra_image = Some(image::load_from_memory(response.bytes().await?.as_ref())?);
+        } else {
+            event!(Level::WARN, "Unsupported content type, ignoring");
+        }
+    }
+    Ok((extra_image, extra_text))
 }
