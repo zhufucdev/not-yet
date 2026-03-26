@@ -1,0 +1,39 @@
+[package]
+name = "not_yet"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = [".", "migration"]
+
+[dependencies]
+escaping = "0.2.3"
+image = "0.25.10"
+llama-runner = "1.0.0"
+reqwest = "0.13.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
+smol_str = "0.3.6"
+teloxide = "0.17.0"
+rss = { version = "2.0.12", features = ["serde"] }
+anyhow = "1.0.102"
+thiserror = "2.0.18"
+futures = "0.3.32"
+tracing-subscriber = "0.3.23"
+tracing = "0.1.44"
+rand = "0.10.0"
+migration = { path = "migration" }
+sea-orm = { version = "2.0.0-rc", features = [
+	"sqlx-sqlite",
+	"macros",
+	"with-time",
+] }
+cron = "0.16.0"
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "sync"] }
+chrono = "0.4.44"
+tracing-test = "0.2.6"
+atom_syndication = { version = "0.12.7", features = ["serde"] }
+
+[features]
+cuda = ["llama-runner/cuda"]
+metal = ["llama-runner/metal"]
