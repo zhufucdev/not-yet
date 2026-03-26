@@ -99,7 +99,7 @@ impl LlmRssItem {
 
             let response = client.get(url).send().await?;
             if response.status().is_success()
-                && let Some(content_type) = response.headers().get("Content-Type")
+                && let Some(content_type) = response.headers().get("content-type")
                 && let Ok(content_type) = content_type.to_str()
             {
                 event!(Level::INFO, "Got extra content, attaching to struct");
@@ -191,7 +191,7 @@ mod test {
     #[traced_test]
     async fn test_rss_feed_fetch_reddit() {
         let headers = HeaderMap::from_iter(vec![(
-            "User-Agent".parse().unwrap(),
+            "user-agent".parse().unwrap(),
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15".parse().unwrap(),
         )]);
         let feed = RssFeed::new("https://www.reddit.com/r/rust.rss", &Some(headers)).unwrap();
