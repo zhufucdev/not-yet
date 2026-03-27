@@ -1,16 +1,18 @@
+use std::cmp::max;
+
 use escaping::Escape;
 use image::DynamicImage;
 use llama_runner::ImageOrText;
 use serde::Serialize;
 use smol_str::SmolStr;
 
-mod rss;
+pub mod rss;
 
 pub use rss::RssFeed;
 use tracing::{Level, event};
 
 pub trait LlmComprehendable {
-    fn get_message(&self) -> Vec<ImageOrText>;
+    fn get_message<'s>(&'s self) -> Vec<ImageOrText<'s>>;
 }
 
 #[derive(Debug, Clone)]
@@ -40,7 +42,7 @@ pub trait Feed<'s> {
 impl<'m> DefaultUpdate<'m> {
     pub fn new(
         title: impl AsRef<str>,
-        content: Vec<ImageOrText<'m>>,
+        content: impl AsRef<[ImageOrText<'m>]>,
         type_: Option<SmolStr>,
     ) -> Self {
         #[derive(Serialize)]
@@ -53,6 +55,7 @@ impl<'m> DefaultUpdate<'m> {
         }
         let escape_im: Escape = Escape::new('&', &['&'], &[], None).unwrap();
         let text_content = content
+            .as_ref()
             .iter()
             .map(|piece| match piece {
                 ImageOrText::Text(text) => escape_im.escape(text).to_string(),
@@ -61,6 +64,7 @@ impl<'m> DefaultUpdate<'m> {
             .collect::<Vec<_>>()
             .join("");
         let images = content
+            .as_ref()
             .iter()
             .filter_map(|piece| {
                 if let ImageOrText::Image(im) = piece {
@@ -91,10 +95,10 @@ impl<'m> DefaultUpdate<'m> {
 }
 
 impl<'a> LlmComprehendable for DefaultUpdate<'a> {
-    fn get_message(&self) -> Vec<ImageOrText> {
+    fn get_message<'s>(&'s self) -> Vec<ImageOrText<'s>> {
         let mut chunks = Vec::new();
         let mut left_delim = 0;
-        for im_idx in 0..self.images.len() - 1 {
+        for im_idx in 0..max(self.images.len(), 1) - 1 {
             if let Some(i) = self
                 .msg_json
                 .get(left_delim..self.msg_json.len())
@@ -117,6 +121,9 @@ impl<'a> LlmComprehendable for DefaultUpdate<'a> {
                 )
             }
         }
+        chunks.push(ImageOrText::Text(
+            self.msg_json.get(left_delim..self.msg_json.len()).unwrap(),
+        ));
         return chunks;
     }
 }
@@ -133,12 +140,12 @@ impl DefaultMetadata {
 }
 
 impl LlmComprehendable for DefaultMetadata {
-    fn get_message(&self) -> Vec<ImageOrText> {
+    fn get_message<'s>(&'s self) -> Vec<ImageOrText<'s>> {
         vec![ImageOrText::Text(self.msg.as_str())]
     }
 }
 
-async fn get_content_as_llm_context<E>(
+async fn get_url_as_llm_context<E>(
     url: &str,
     client: &reqwest::Client,
 ) -> Result<(Option<DynamicImage>, Option<String>), E>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<prompt>
+	<p>You are tasked with judging whether {condition} for:</p>
+  <expand>{update}</expand>
+  <p>Is it true that {condition}?</p>
+  <p>Avoid: explanations, overthinking</p>
+  <p>Answer in "Yes" or "No"</p>
+</prompt>

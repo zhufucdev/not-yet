@@ -8,7 +8,7 @@ use tracing::{Instrument, Level, event, info_span};
 
 use reqwest::header::{HeaderMap, HeaderName};
 
-use crate::source::{DefaultMetadata, Feed, LlmComprehendable, get_content_as_llm_context};
+use crate::source::{DefaultMetadata, Feed, LlmComprehendable, get_url_as_llm_context};
 
 pub struct RssFeed {
     url: String,
@@ -94,7 +94,7 @@ impl LlmRssItem {
             let (extra_image, extra_text) = if let Some(content) = item.content() {
                 if content.starts_with("http://") || content.starts_with("https://") {
                     event!(Level::DEBUG, "Getting content from url {}", content);
-                    get_content_as_llm_context::<Error>(content, client).await?
+                    get_url_as_llm_context::<Error>(content, client).await?
                 } else {
                     (None, Some(content.to_string()))
                 }
@@ -114,7 +114,7 @@ impl LlmRssItem {
 }
 
 impl LlmComprehendable for LlmRssItem {
-    fn get_message(&self) -> Vec<ImageOrText> {
+    fn get_message<'s>(&'s self) -> Vec<ImageOrText<'s>> {
         let mut chunks = Vec::new();
         chunks.push(ImageOrText::Text(self.json.as_ref()));
         if self.extra_text.is_some() || self.extra_image.is_some() {

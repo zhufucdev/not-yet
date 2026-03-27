@@ -33,6 +33,9 @@ tokio = { version = "1.50.0", features = ["rt-multi-thread", "sync"] }
 chrono = "0.4.44"
 tracing-test = "0.2.6"
 atom_syndication = { version = "0.12.7", features = ["serde"] }
+quick-xml = { version = "0.39.2", features = ["encoding"] }
+encoding_rs = "0.8.35"
+uuid = "1.23.0"
 
 [features]
 cuda = ["llama-runner/cuda"]
