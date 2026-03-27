@@ -1,0 +1,21 @@
+use std::path::PathBuf;
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum DecisionMemoryError {
+    #[error("db: {0}")]
+    Db(#[from] sea_orm::DbErr),
+    #[error("serialization: {0}")]
+    Serialization(#[from] rmp_serde::encode::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum CreateDecisionMemoryError {
+    #[error("unsupported material type")]
+    UnsupportedMaterialType,
+    #[error("invalid working dir: {0}")]
+    InvalidWorkingDir(PathBuf),
+    #[error("db: {0}")]
+    Db(#[from] sea_orm::DbErr),
+}

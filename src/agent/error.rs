@@ -22,3 +22,11 @@ pub enum TemplateExpansionError {
     #[error("invalid macro: {0}")]
     InvalidMacro(String),
 }
+
+#[derive(Debug, Error)]
+pub enum GetTruthValueError<MemoryError> {
+    #[error("llama: {0}")]
+    Llama(#[from] RunnerError),
+    #[error("memory: {0}")]
+    Memory(MemoryError),
+}

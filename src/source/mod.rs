@@ -3,7 +3,7 @@ use std::cmp::max;
 use escaping::Escape;
 use image::DynamicImage;
 use llama_runner::ImageOrText;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 pub mod rss;
@@ -11,11 +11,13 @@ pub mod rss;
 pub use rss::RssFeed;
 use tracing::{Level, event};
 
+use crate::agent::memory::sqlite::material;
+
 pub trait LlmComprehendable {
+    const KIND: Option<material::Kind> = None;
     fn get_message<'s>(&'s self) -> Vec<ImageOrText<'s>>;
 }
 
-#[derive(Debug, Clone)]
 pub struct DefaultUpdate<'m> {
     pub title: String,
     images: Vec<&'m image::DynamicImage>,

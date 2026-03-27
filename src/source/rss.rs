@@ -8,7 +8,10 @@ use tracing::{Instrument, Level, event, info_span};
 
 use reqwest::header::{HeaderMap, HeaderName};
 
-use crate::source::{DefaultMetadata, Feed, LlmComprehendable, get_url_as_llm_context};
+use crate::{
+    agent::memory::sqlite::material,
+    source::{DefaultMetadata, Feed, LlmComprehendable, get_url_as_llm_context},
+};
 
 pub struct RssFeed {
     url: String,
@@ -16,7 +19,7 @@ pub struct RssFeed {
 }
 
 pub struct LlmRssItem {
-    json: String,
+    pub(crate) json: String,
     extra_image: Option<DynamicImage>,
     extra_text: Option<String>,
 }
@@ -114,6 +117,8 @@ impl LlmRssItem {
 }
 
 impl LlmComprehendable for LlmRssItem {
+    const KIND: Option<material::Kind> = Some(material::Kind::RssItem);
+
     fn get_message<'s>(&'s self) -> Vec<ImageOrText<'s>> {
         let mut chunks = Vec::new();
         chunks.push(ImageOrText::Text(self.json.as_ref()));

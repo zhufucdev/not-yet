@@ -1,12 +1,8 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, hash_map},
-    rc::Rc,
-    sync::RwLock,
-};
+use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     agent::{
+        error::GetTruthValueError,
         memory::{Decision, DecisionMemory},
         template::{AsBorrowedMessages, BorrowImageOwnText, PromptMacros},
     },
@@ -15,7 +11,7 @@ use crate::{
 };
 use chrono::Utc;
 use llama_runner::{VisionLmRequest, VisionLmRunner, VisionLmRunnerExt};
-use tracing::{Level, debug_span, event, info_span};
+use tracing::{Instrument, Level, debug_span, event, info_span};
 
 pub mod error;
 pub mod memory;
@@ -35,7 +31,7 @@ impl<Runner, Update, Memory> ConditionMatcher<Runner, Memory>
 where
     for<'s, 'req> Runner: VisionLmRunner<'s, 'req>,
     Update: LlmComprehendable,
-    Memory: DecisionMemory<Update = Update>,
+    Memory: DecisionMemory<Material = Update>,
 {
     pub fn new(runner: Runner, condition: impl ToString, memory: Memory) -> Self {
         Self {
@@ -45,65 +41,71 @@ where
         }
     }
 
-    pub fn get_truth_value(
+    pub async fn get_truth_value(
         &self,
         update: Update,
-    ) -> Result<bool, llama_runner::error::RunnerError> {
-        let mut response = info_span!("condition_matcher.get_truth_value.inference").in_scope(
-            || -> Result<String, llama_runner::error::RunnerError> {
-                let mem = self.memory.borrow();
-                let mut macros = PromptMacros::new();
+    ) -> Result<bool, GetTruthValueError<Memory::Error>> {
+        let inference_span = info_span!("condition_matcher.get_truth_value.inference");
+        let response: Result<String, GetTruthValueError<Memory::Error>> = async {
+            let mem = self.memory.borrow();
+            let newest_truthy_mem = mem
+                .iter_newest_first()
+                .await
+                .map_err(GetTruthValueError::Memory)?
+                .find(|d| d.as_ref().is_truthy);
+
+            let literals = [("condition".into(), self.condition.clone())].into();
+            let mut macros = PromptMacros::new();
+            macros.insert(
+                "update".into(),
+                Box::new(|| {
+                    let content_boundary = secure::generate_content_boundary();
+                    std::iter::once(BorrowImageOwnText::Text(content_boundary.clone()))
+                        .chain(update.get_message().into_iter().map(|m| m.into()))
+                        .chain(std::iter::once(BorrowImageOwnText::Text(content_boundary)))
+                        .collect::<Vec<_>>()
+                }),
+            );
+            let messages = if let Some(truthy_mem) = newest_truthy_mem.as_ref() {
                 macros.insert(
-                    "update".into(),
+                    "previous_acknowledgement".into(),
                     Box::new(|| {
                         let content_boundary = secure::generate_content_boundary();
+                        let message = truthy_mem.as_ref().material.get_message();
                         std::iter::once(BorrowImageOwnText::Text(content_boundary.clone()))
-                            .chain(update.get_message().into_iter().map(|m| m.into()))
+                            .chain(message.into_iter().map(|m| m.into()))
                             .chain(std::iter::once(BorrowImageOwnText::Text(content_boundary)))
                             .collect::<Vec<_>>()
                     }),
                 );
-                let literals = [("condition".into(), self.condition.clone())].into();
+                template::expand_prompt(
+                    include_str!("../../prompt/judge_with_history.xml"),
+                    &literals,
+                    &macros,
+                )
+                .unwrap()
+            } else {
+                template::expand_prompt(
+                    include_str!("../../prompt/judge_without_history.xml"),
+                    &literals,
+                    &macros,
+                )
+                .unwrap()
+            };
+            let res = self.runner.get_vlm_response(VisionLmRequest {
+                messages: messages.as_ref_msg(),
+                prefill: Some("<think>\n".into()),
+                ..Default::default()
+            })?;
+            event!(Level::DEBUG, "Full response from LLM: \n{}", res);
+            Ok(res)
+        }
+        .instrument(inference_span)
+        .await;
+        let mut response = response?;
 
-                let messages = if let Some(truthy_mem) =
-                    mem.iter_newest_first().find(|d| d.is_truthy)
-                {
-                    macros.insert(
-                        "previous_acknowledgement".into(),
-                        Box::new(|| {
-                            let content_boundary = secure::generate_content_boundary();
-                            let message = truthy_mem.material.get_message();
-                            std::iter::once(BorrowImageOwnText::Text(content_boundary.clone()))
-                                .chain(message.into_iter().map(|m| m.into()))
-                                .chain(std::iter::once(BorrowImageOwnText::Text(content_boundary)))
-                                .collect::<Vec<_>>()
-                        }),
-                    );
-                    template::expand_prompt(
-                        include_str!("../../prompt/judge_with_history.xml"),
-                        &literals,
-                        &macros,
-                    )
-                    .unwrap()
-                } else {
-                    template::expand_prompt(
-                        include_str!("../../prompt/judge_without_history.xml"),
-                        &literals,
-                        &macros,
-                    )
-                    .unwrap()
-                };
-                let res = self.runner.get_vlm_response(VisionLmRequest {
-                    messages: messages.as_ref_msg(),
-                    prefill: Some("<think>\n".into()),
-                    ..Default::default()
-                })?;
-                event!(Level::DEBUG, "Full response from LLM: \n{}", res);
-                Ok(res)
-            },
-        )?;
-
-        debug_span!("condition_matcher.get_truth_value.post_process").in_scope(move || {
+        let post_process_span = debug_span!("condition_matcher.get_truth_value.post_process");
+        async {
             loop {
                 if let Some(think_start) = response.find("<think>")
                     && let Some(think_end) = response.find("</think>")
@@ -121,13 +123,19 @@ where
             );
             let truthy = response.contains("Yes") || response.contains("yes");
             event!(Level::INFO, "Remember this update as {}", truthy);
-            self.memory.borrow_mut().push(Decision {
-                time: Utc::now(),
-                material: update,
-                is_truthy: truthy,
-            });
+            self.memory
+                .borrow_mut()
+                .push(Decision {
+                    time: Utc::now(),
+                    material: update,
+                    is_truthy: truthy,
+                })
+                .await
+                .map_err(GetTruthValueError::Memory)?;
             Ok(truthy)
-        })
+        }
+        .instrument(post_process_span)
+        .await
     }
 }
 
@@ -137,7 +145,7 @@ mod test {
     use serde_json::json;
     use tracing_test::traced_test;
 
-    use crate::{agent::memory::DebugMemory, source::DefaultUpdate};
+    use crate::{agent::memory::debug::DebugDecisionMemory, source::DefaultUpdate};
 
     use super::*;
 
@@ -147,7 +155,7 @@ mod test {
         let matcher = ConditionMatcher::new(
             Gemma3VisionRunner::default().await.unwrap(),
             "there has been at least 2 chapters since last time or ever",
-            DebugMemory::<DefaultUpdate>::new(),
+            DebugDecisionMemory::<DefaultUpdate>::new(),
         );
         let ch1 = json!({
             "title": "Ch. 1: The New Girl",
@@ -162,6 +170,7 @@ mod test {
                 [ImageOrText::Text(&ch1)],
                 Some("RSS item".into()),
             ))
+            .await
             .unwrap();
         assert!(!ch1_applicable);
 
@@ -178,6 +187,7 @@ mod test {
                 [ImageOrText::Text(&ch2)],
                 Some("RSS item".into()),
             ))
+            .await
             .unwrap();
         assert!(ch2_applicable);
 
@@ -194,9 +204,9 @@ mod test {
                 [ImageOrText::Text(&ch3)],
                 Some("RSS item".into()),
             ))
+            .await
             .unwrap();
         assert!(!ch3_applicable);
-
 
         let ch4 = json!({
             "title": "Ch. 4: Not the Same",
@@ -211,6 +221,7 @@ mod test {
                 [ImageOrText::Text(&ch4)],
                 Some("RSS item".into()),
             ))
+            .await
             .unwrap();
         assert!(ch4_applicable);
     }
