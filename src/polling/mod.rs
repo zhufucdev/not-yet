@@ -1,4 +1,7 @@
-pub use schedule::{Scheduler, Schedule};
+use std::fmt::Debug;
+use std::hash::Hash;
+
+pub use schedule::{Schedule, Scheduler};
 use serde::{Serialize, de::DeserializeOwned};
 
 pub mod error;
@@ -6,4 +9,12 @@ pub mod schedule;
 pub mod task;
 pub mod trigger;
 
-pub trait DataContract: Clone + Serialize + DeserializeOwned {}
+pub trait KeyContract:
+    Debug + Hash + Eq + PartialEq + Clone + Serialize + DeserializeOwned
+{
+}
+
+impl<T> KeyContract for T where
+    T: Debug + Hash + Eq + PartialEq + Clone + Serialize + DeserializeOwned
+{
+}

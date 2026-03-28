@@ -1,6 +1,9 @@
+use async_trait::async_trait;
 use image::DynamicImage;
 use llama_runner::ImageOrText;
 use rss::Channel;
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use smol_str::SmolStr;
 use std::str::FromStr;
 use thiserror::Error;
@@ -10,7 +13,9 @@ use reqwest::header::{HeaderMap, HeaderName};
 
 use crate::{
     agent::memory::sqlite::material,
+    serde_utils::DynImageConverter,
     source::{DefaultMetadata, Feed, LlmComprehendable, get_url_as_llm_context},
+    update::Updatable,
 };
 
 pub struct RssFeed {
@@ -18,10 +23,19 @@ pub struct RssFeed {
     client: reqwest::Client,
 }
 
+#[serde_as]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LlmRssItem {
     pub(crate) json: String,
+    #[serde_as(as = "Option<DynImageConverter>")]
     extra_image: Option<DynamicImage>,
     extra_text: Option<String>,
+}
+
+impl std::hash::Hash for LlmRssItem {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.json.hash(state);
+    }
 }
 
 impl RssFeed {
@@ -46,11 +60,11 @@ impl RssFeed {
     async fn get_rss_channel(&self) -> Result<Channel, Error> {
         let span = info_span!("rss_feed.get_rss_channel");
         async move {
-            event!(Level::INFO, "Fetching URL {}", self.url);
+            event!(Level::INFO, "fetching URL {}", self.url);
             let resposne = self.client.get(&self.url).send().await?;
             event!(
                 Level::INFO,
-                "Got status {}, content type {}",
+                "got status {}, content type {}",
                 resposne.status(),
                 resposne
                     .headers()
@@ -58,6 +72,7 @@ impl RssFeed {
                     .map(|h| h.to_str().unwrap_or_default())
                     .unwrap_or_default()
             );
+            let response = resposne.error_for_status_ref()?;
             Ok(Channel::from_str(resposne.text().await?.as_ref())?)
         }
         .instrument(span)
@@ -65,18 +80,23 @@ impl RssFeed {
     }
 }
 
-impl<'s> Feed<'s> for RssFeed {
-    type Item = LlmRssItem;
+impl Feed for RssFeed {
     type Metadata = DefaultMetadata;
 
-    type Error = Error;
-
-    async fn get_metadata(&'s self) -> Result<Self::Metadata, Self::Error> {
+    async fn get_metadata(&self) -> Result<Self::Metadata, Self::Error> {
         let channel = self.get_rss_channel().await?;
         Ok(DefaultMetadata::new(channel.title, Some("RSS feed".into())))
     }
+}
 
-    async fn get_items(&'s self) -> Result<Vec<Self::Item>, Self::Error> {
+#[async_trait]
+impl Updatable for RssFeed {
+    type Item = LlmRssItem;
+    type Error = Error;
+
+    async fn get_items(
+        &self,
+    ) -> Result<Vec<<Self as Updatable>::Item>, <Self as Updatable>::Error> {
         let channel = self.get_rss_channel().await?;
 
         futures::future::try_join_all(channel.items.into_iter().map(

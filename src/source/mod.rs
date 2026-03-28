@@ -8,10 +8,10 @@ use smol_str::SmolStr;
 
 pub mod rss;
 
-pub use rss::RssFeed;
+pub use rss::{LlmRssItem, RssFeed};
 use tracing::{Level, event};
 
-use crate::agent::memory::sqlite::material;
+use crate::{agent::memory::sqlite::material, update::Updatable};
 
 pub trait LlmComprehendable {
     const KIND: Option<material::Kind> = None;
@@ -32,13 +32,13 @@ pub struct DefaultMetadata {
     msg: String,
 }
 
-pub trait Feed<'s> {
-    type Item: LlmComprehendable;
+pub trait Feed: Updatable
+where
+    <Self as Updatable>::Item: LlmComprehendable,
+{
     type Metadata: LlmComprehendable;
-    type Error: std::error::Error;
 
-    async fn get_metadata(&'s self) -> Result<Self::Metadata, Self::Error>;
-    async fn get_items(&'s self) -> Result<Vec<Self::Item>, Self::Error>;
+    async fn get_metadata(&self) -> Result<Self::Metadata, <Self as Updatable>::Error>;
 }
 
 impl<'m> DefaultUpdate<'m> {

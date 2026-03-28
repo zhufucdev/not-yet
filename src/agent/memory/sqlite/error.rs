@@ -19,8 +19,6 @@ pub enum DecisionMemoryError {
 pub enum CreateDecisionMemoryError {
     #[error("unsupported material type")]
     UnsupportedMaterialType,
-    #[error("invalid working dir: {0}")]
-    InvalidWorkingDir(PathBuf),
     #[error("file io: {0}")]
     FileIo(#[from] std::io::Error),
     #[error("db: {0}")]

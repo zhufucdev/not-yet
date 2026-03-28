@@ -87,7 +87,7 @@ fn mock_decision(title: &str, is_truthy: bool) -> Decision<MockRssItem> {
 async fn new_valid_path_succeeds() {
     let dir = std::env::temp_dir();
     let result: Result<SqliteDecisionMemory<MockRssItem>, _> =
-        SqliteDecisionMemory::new(&dir).await;
+        SqliteDecisionMemory::new(in_memory_db().await, &dir).await;
     result.expect("new() should succeed for a valid path");
 }
 
@@ -95,7 +95,8 @@ async fn new_valid_path_succeeds() {
 #[tokio::test]
 async fn new_unsupported_kind_returns_error() {
     let dir = std::env::temp_dir();
-    let result: Result<SqliteDecisionMemory<NoKindItem>, _> = SqliteDecisionMemory::new(&dir).await;
+    let result: Result<SqliteDecisionMemory<NoKindItem>, _> =
+        SqliteDecisionMemory::new(in_memory_db().await, &dir).await;
     assert!(
         matches!(
             result,

@@ -19,31 +19,38 @@ pub mod error;
 pub mod memory;
 mod template;
 
-pub struct ConditionMatcher<Runner, History>
-where
-    for<'s, 'req> Runner: VisionLmRunner<'s, 'req>,
-    History: DecisionMemory,
-{
-    runner: Runner,
-    condition: String,
-    memory: Rc<RefCell<History>>,
+pub trait Decider {
+    type Material;
+    type Error;
+    async fn get_truth_value(&self, update: Self::Material) -> Result<bool, Self::Error>;
 }
 
-impl<Runner, Update, Memory> ConditionMatcher<Runner, Memory>
-where
-    for<'s, 'req> Runner: VisionLmRunner<'s, 'req>,
-    Update: LlmComprehendable,
-    Memory: DecisionMemory<Material = Update>,
-{
-    pub fn new(runner: Runner, condition: impl ToString, memory: Memory) -> Self {
+pub struct LlmConditionMatcher<'r, Runner, Memory> {
+    runner: &'r Runner,
+    condition: String,
+    memory: Rc<RefCell<Memory>>,
+}
+
+impl<'r, Runner, Memory> LlmConditionMatcher<'r, Runner, Memory> {
+    pub fn new(runner: &'r Runner, condition: impl ToString, memory: Memory) -> Self {
         Self {
             runner,
             condition: condition.to_string(),
             memory: Rc::new(RefCell::new(memory)),
         }
     }
+}
 
-    pub async fn get_truth_value(
+impl<'r, Runner, Update, Memory> Decider for LlmConditionMatcher<'r, Runner, Memory>
+where
+    for<'req> Runner: VisionLmRunner<'r, 'req>,
+    Update: LlmComprehendable,
+    Memory: DecisionMemory<Material = Update>,
+{
+    type Material = Update;
+    type Error = GetTruthValueError<Memory::Error>;
+
+    async fn get_truth_value(
         &self,
         update: Update,
     ) -> Result<bool, GetTruthValueError<Memory::Error>> {
@@ -160,8 +167,9 @@ mod test {
     #[tokio::test]
     #[traced_test]
     async fn test_condition_matcher() {
-        let matcher = ConditionMatcher::new(
-            Gemma3VisionRunner::default().await.unwrap(),
+        let runner = Gemma3VisionRunner::default().await.unwrap();
+        let matcher = LlmConditionMatcher::new(
+            &runner,
             "there has been at least 2 chapters since last time or ever",
             DebugDecisionMemory::<DefaultUpdate>::new(),
         );

@@ -26,28 +26,25 @@ pub mod material;
 #[cfg(test)]
 mod test;
 
-pub struct SqliteDecisionMemory<U: LlmComprehendable> {
+pub struct SqliteDecisionMemory<U> {
     db: DatabaseConnection,
     material_dir: PathBuf,
     _marker: PhantomData<U>,
 }
 
 impl<U: LlmComprehendable> SqliteDecisionMemory<U> {
-    pub async fn new(working_dir: impl AsRef<Path>) -> Result<Self, CreateDecisionMemoryError> {
+    pub fn new(
+        db: DatabaseConnection,
+        working_dir: impl AsRef<Path>,
+    ) -> Result<Self, CreateDecisionMemoryError> {
         if U::KIND.is_none() {
             return Err(CreateDecisionMemoryError::UnsupportedMaterialType);
         }
-        let fp = working_dir.as_ref().join("dmem.db");
-        let Some(fps) = fp.to_str() else {
-            return Err(CreateDecisionMemoryError::InvalidWorkingDir(
-                working_dir.as_ref().to_path_buf(),
-            ));
-        };
         let material_dir = working_dir.as_ref().join("material");
         fs::create_dir_all(&material_dir)?;
 
         Ok(Self {
-            db: Database::connect(format!("sqlite://{}?mode=rwc", fps)).await?,
+            db,
             _marker: PhantomData,
             material_dir,
         })
