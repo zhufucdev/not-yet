@@ -10,7 +10,9 @@ use crate::{
     source::LlmComprehendable,
 };
 use chrono::Utc;
+use futures::{StreamExt, TryStreamExt, future};
 use llama_runner::{VisionLmRequest, VisionLmRunner, VisionLmRunnerExt};
+use tokio::pin;
 use tracing::{Instrument, Level, debug_span, event, info_span};
 
 pub mod error;
@@ -48,11 +50,17 @@ where
         let inference_span = info_span!("condition_matcher.get_truth_value.inference");
         let response: Result<String, GetTruthValueError<Memory::Error>> = async {
             let mem = self.memory.borrow();
-            let newest_truthy_mem = mem
+            let stream = mem
                 .iter_newest_first()
-                .await
-                .map_err(GetTruthValueError::Memory)?
-                .find(|d| d.as_ref().is_truthy);
+                .filter(|r| {
+                    future::ready(match r {
+                        Ok(d) => d.as_ref().is_truthy,
+                        Err(_) => true,
+                    })
+                })
+                .map_err(|e| GetTruthValueError::Memory(e));
+            pin!(stream);
+            let newest_truthy_mem = stream.try_next().await?;
 
             let literals = [("condition".into(), self.condition.clone())].into();
             let mut macros = PromptMacros::new();

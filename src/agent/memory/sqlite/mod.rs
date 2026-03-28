@@ -1,10 +1,15 @@
-use std::{marker::PhantomData, path::Path};
-
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Database, DatabaseConnection, EntityOrSelect,
-    EntityTrait, QueryFilter, QueryOrder, Related,
+use std::{
+    fs,
+    marker::PhantomData,
+    path::{Path, PathBuf},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+use async_stream::try_stream;
+use futures::Stream;
+use sea_orm::{
+    ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Related,
+};
+use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -23,6 +28,7 @@ mod test;
 
 pub struct SqliteDecisionMemory<U: LlmComprehendable> {
     db: DatabaseConnection,
+    material_dir: PathBuf,
     _marker: PhantomData<U>,
 }
 
@@ -37,9 +43,13 @@ impl<U: LlmComprehendable> SqliteDecisionMemory<U> {
                 working_dir.as_ref().to_path_buf(),
             ));
         };
+        let material_dir = working_dir.as_ref().join("material");
+        fs::create_dir_all(&material_dir)?;
+
         Ok(Self {
             db: Database::connect(format!("sqlite://{}?mode=rwc", fps)).await?,
             _marker: PhantomData,
+            material_dir,
         })
     }
 }
@@ -53,32 +63,51 @@ where
 
     async fn push(&mut self, decision: Decision<Self::Material>) -> Result<(), Self::Error> {
         let material_binary = rmp_serde::to_vec(&decision.material)?;
-        let shasum = format!("{:x?}", Sha256::digest(material_binary));
-
-        decision::ActiveModel::builder()
-            .set_time(decision.time)
-            .set_is_truthy(decision.is_truthy)
-            .set_material(
-                material::ActiveModel::builder()
-                    .set_kind(Self::Material::KIND.unwrap())
-                    .set_shasum(shasum),
-            )
-            .save(&self.db)
-            .await?;
+        let shasum = format!("{:x?}", Sha256::digest(&material_binary));
+        let material_fp = self.material_dir.join(&shasum);
+        futures::future::try_join(
+            async || -> Result<(), Self::Error> {
+                tokio::fs::write(material_fp, material_binary).await?;
+                Ok(())
+            }(),
+            async || -> Result<(), Self::Error> {
+                decision::ActiveModel::builder()
+                    .set_time(decision.time)
+                    .set_is_truthy(decision.is_truthy)
+                    .set_material(
+                        material::ActiveModel::builder()
+                            .set_kind(Self::Material::KIND.unwrap())
+                            .set_shasum(shasum),
+                    )
+                    .save(&self.db)
+                    .await?;
+                Ok(())
+            }(),
+        )
+        .await?;
         Ok(())
     }
 
-    async fn iter_newest_first<'s>(
+    fn iter_newest_first<'s>(
         &'s self,
-    ) -> Result<impl Iterator<Item = impl AsRef<Decision<Self::Material>>>, Self::Error> {
-        Ok(decision::Entity::find()
-            .find_also_related(material::Entity)
-            .filter(material::Column::Kind.eq(Self::Material::KIND.unwrap()))
-            .order_by_desc(decision::Column::Time)
-            .all(&self.db)
-            .await?
-            .into_iter()
-            .map(|item| item.into_decision()))
+    ) -> impl Stream<Item = Result<impl AsRef<Decision<Self::Material>>, Self::Error>> {
+        try_stream! {
+            for (decision, material) in decision::Entity::find()
+                .find_also_related(material::Entity)
+                .filter(material::Column::Kind.eq(Self::Material::KIND.unwrap()))
+                .order_by_desc(decision::Column::Time)
+                .all(&self.db)
+                .await? {
+                let fp = self.material_dir.join(&material.unwrap().shasum);
+                let bin = tokio::fs::read(fp).await?;
+                let material = rmp_serde::from_slice(&bin)?;
+                yield Decision {
+                    time: decision.time,
+                    is_truthy: decision.is_truthy,
+                    material
+                };
+            }
+        }
     }
 
     async fn clear(&mut self) -> Result<(), Self::Error> {
@@ -93,18 +122,5 @@ where
             .exec(&self.db)
             .await?;
         Ok(())
-    }
-}
-
-trait IntoDecision<U: LlmComprehendable> {
-    fn into_decision(self) -> Decision<U>;
-}
-
-impl<U> IntoDecision<U> for (decision::Model, Option<material::Model>)
-where
-    U: LlmComprehendable + DeserializeOwned,
-{
-    fn into_decision(self) -> Decision<U> {
-        todo!()
     }
 }

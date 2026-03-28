@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use futures::Stream;
 use uuid::Uuid;
 
 use crate::source::LlmComprehendable;
@@ -12,9 +13,9 @@ pub trait DecisionMemory {
     type Error;
 
     async fn push(&mut self, decision: Decision<Self::Material>) -> Result<(), Self::Error>;
-    async fn iter_newest_first<'s>(
+    fn iter_newest_first<'s>(
         &'s self,
-    ) -> Result<impl Iterator<Item = impl AsRef<Decision<Self::Material>>>, Self::Error>;
+    ) -> impl Stream<Item = Result<impl AsRef<Decision<Self::Material>>, Self::Error>>;
     async fn clear(&mut self) -> Result<(), Self::Error>;
 }
 

@@ -1,4 +1,7 @@
+use std::env::temp_dir;
+
 use chrono::Utc;
+use futures::{StreamExt, TryStreamExt};
 use llama_runner::ImageOrText;
 use sea_orm::{ConnectionTrait, Database, Schema};
 use serde::{Deserialize, Serialize};
@@ -113,6 +116,7 @@ async fn push_succeeds() {
     let mut mem = SqliteDecisionMemory::<MockRssItem> {
         db,
         _marker: std::marker::PhantomData,
+        material_dir: temp_dir(),
     };
 
     let result = mem.push(mock_decision("hello", true)).await;
@@ -128,12 +132,12 @@ async fn push_succeeds() {
 /// this test is expected to panic — it documents the current state and will
 /// pass once the implementation is complete.
 #[tokio::test]
-#[should_panic]
 async fn iter_newest_first_panics_until_into_decision_implemented() {
     let db = in_memory_db().await;
     let mut mem = SqliteDecisionMemory::<MockRssItem> {
         db,
         _marker: std::marker::PhantomData,
+        material_dir: temp_dir(),
     };
 
     // Push an older decision first, then a newer one.
@@ -156,7 +160,7 @@ async fn iter_newest_first_panics_until_into_decision_implemented() {
     mem.push(newer).await.unwrap();
 
     // This call will panic at `into_decision()` which is `todo!()`.
-    let items: Vec<_> = mem.iter_newest_first().await.unwrap().collect();
+    let items: Vec<_> = mem.iter_newest_first().try_collect().await.unwrap();
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].as_ref().material.title, "newer");
     assert_eq!(items[1].as_ref().material.title, "older");
@@ -174,6 +178,7 @@ async fn clear_yields_empty_iter() {
     let mut mem = SqliteDecisionMemory::<MockRssItem> {
         db,
         _marker: std::marker::PhantomData,
+        material_dir: temp_dir(),
     };
 
     mem.push(mock_decision("a", true)).await.unwrap();
@@ -184,10 +189,6 @@ async fn clear_yields_empty_iter() {
     // iter_newest_first() would panic inside into_decision() if it reached
     // any rows, but after clear() the query should return zero rows and the
     // map closure is never called, so this is safe to call.
-    let count = mem
-        .iter_newest_first()
-        .await
-        .expect("iter_newest_first() after clear() should not error")
-        .count();
+    let count = mem.iter_newest_first().count().await;
     assert_eq!(count, 0, "expected empty iterator after clear()");
 }

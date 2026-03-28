@@ -1,5 +1,8 @@
 use std::collections::BinaryHeap;
 
+use async_stream::try_stream;
+use futures::Stream;
+
 use crate::{
     agent::memory::{Decision, DecisionMemory, TimeOrderedDecisionMemory},
     source::LlmComprehendable,
@@ -27,10 +30,14 @@ impl<U: LlmComprehendable> DecisionMemory for DebugDecisionMemory<U> {
         Ok(())
     }
 
-    async fn iter_newest_first<'s>(
+    fn iter_newest_first<'s>(
         &'s self,
-    ) -> Result<impl Iterator<Item = impl AsRef<Decision<Self::Material>>>, Self::Error> {
-        Ok(self.decisions.iter().rev())
+    ) -> impl Stream<Item = Result<impl AsRef<Decision<Self::Material>>, Self::Error>> {
+        try_stream! {
+            for decision in self.decisions.iter().rev() {
+                yield decision;
+            }
+        }
     }
 
     async fn clear(&mut self) -> Result<(), Self::Error> {
