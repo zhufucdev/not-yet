@@ -112,7 +112,7 @@ where
                 prefill: Some("<think>\n".into()),
                 ..Default::default()
             })?;
-            event!(Level::DEBUG, "Full response from LLM: \n{}", res);
+            event!(Level::DEBUG, "full response from LLM: \n{}", res);
             Ok(res)
         }
         .instrument(inference_span)
@@ -133,11 +133,11 @@ where
             }
             event!(
                 Level::DEBUG,
-                "Response after stripping out ttc: \n{}",
+                "response after stripping out ttc: \n{}",
                 response
             );
             let truthy = response.contains("Yes") || response.contains("yes");
-            event!(Level::INFO, "Remember this update as {}", truthy);
+            event!(Level::INFO, "remember this update as {}", truthy);
             self.memory
                 .borrow_mut()
                 .push(Decision {

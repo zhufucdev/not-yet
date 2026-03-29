@@ -2,6 +2,7 @@
 <prompt>
 	<p>You are tasked with judging whether {condition} for:</p>
   <expand>{update}</expand>
+  <p>Note: this is the first time you have encountered this series</p>
   <p>Is it true that {condition}?</p>
   <p>Avoid: explanations, overthinking</p>
   <p>Answer in "Yes" or "No"</p>

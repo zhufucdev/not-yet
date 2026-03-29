@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 use crate::polling::error::TaskCancellationError;
 
 pub mod sqlite;
+pub mod accept;
 
 #[async_trait]
 pub trait UpdatePersistence: Unpin + Send + Sync + 'static {
@@ -142,7 +143,6 @@ where
                             async move { items.write().await.pop() },
                         )));
                         *this.state.borrow_mut() = UpdateState::Updated { fut, data };
-                        return Poll::Pending;
                     }
                 },
 
