@@ -26,7 +26,10 @@ use crate::{
     },
     polling::{Scheduler, task::Task, trigger::ScheduleTrigger},
     source::{Feed, LlmComprehendable, LlmRssItem, RssFeed},
-    update::{UpdatePersistence, UpdateWakerExt, sqlite::SqliteUpdatePersistence},
+    update::{
+        UpdatePersistence, UpdateWakerExt, accept::AcceptUpdatePersistence,
+        sqlite::SqliteUpdatePersistence,
+    },
 };
 
 mod args;
@@ -101,8 +104,7 @@ pub async fn main() -> anyhow::Result<()> {
                         &sub.condition,
                         SqliteDecisionMemory::new(db.clone(), &data_path)?,
                     );
-                    let persistence =
-                        SqliteUpdatePersistence::new(db.clone(), &metadata.name)?;
+                    let persistence = AcceptUpdatePersistence::new();
                     let updates =
                         check_feed(&metadata.name, &feed, &decider, &scheduler, persistence);
                     pin_mut!(updates);
