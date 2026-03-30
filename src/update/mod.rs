@@ -12,8 +12,8 @@ use tokio::sync::RwLock;
 
 use crate::polling::error::TaskCancellationError;
 
-pub mod sqlite;
 pub mod accept;
+pub mod sqlite;
 
 #[async_trait]
 pub trait UpdatePersistence: Unpin + Send + Sync + 'static {
@@ -95,7 +95,10 @@ where
                 UpdateState::Fetching { fut, data } => {
                     let items = match fut.borrow_mut().poll_unpin(cx) {
                         Poll::Pending => return Poll::Pending, // waker registered by fut
-                        Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(Error::Fetch(e)))),
+                        Poll::Ready(Err(e)) => {
+                            *this.state.borrow_mut() = UpdateState::Idle;
+                            return Poll::Ready(Some(Err(Error::Fetch(e))));
+                        }
                         Poll::Ready(Ok(items)) => items,
                     };
                     let items = Arc::new(RwLock::new(items));
@@ -148,6 +151,7 @@ where
 
                 UpdateState::Updated { fut, data } => match fut.borrow_mut().poll_unpin(cx) {
                     Poll::Ready(it) => {
+                        *this.state.borrow_mut() = UpdateState::Idle;
                         return Poll::Ready(Some(Ok((it, data.borrow_mut().take().unwrap()))));
                     }
                     Poll::Pending => return Poll::Pending,

@@ -1,7 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fmt::Display,
-    hash::Hash,
+    hash::{DefaultHasher, Hash, Hasher},
     io::{Write, stdout},
     path::Path,
     time::Duration,
@@ -9,13 +9,14 @@ use std::{
 
 use anyhow::{Context, anyhow};
 use clap::Parser;
-use futures::{Stream, StreamExt, TryStreamExt, pin_mut, stream};
+use futures::{Stream, StreamExt, TryStreamExt, future, pin_mut, stream};
 use llama_runner::Gemma3VisionRunner;
 use migration::{Migrator, MigratorTrait};
 use reqwest::header::HeaderMap;
 use sea_orm::{Database, DatabaseConnection};
 use serde::{Serialize, de::DeserializeOwned};
-use tracing::{Instrument, Level, debug_span, event, level_filters::LevelFilter};
+use smol_str::ToSmolStr;
+use tracing::{Instrument, Level, debug_span, event, info_span, level_filters::LevelFilter};
 use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
 use crate::{
@@ -24,7 +25,7 @@ use crate::{
         args::Args,
         config::{Config, RunMode, Subscription},
     },
-    polling::{Scheduler, task::Task, trigger::ScheduleTrigger},
+    polling::{self, Scheduler, schedule, task::Task, trigger::ScheduleTrigger},
     source::{Feed, LlmComprehendable, LlmRssItem, RssFeed},
     update::{
         UpdatePersistence, UpdateWakerExt, accept::AcceptUpdatePersistence,
@@ -81,7 +82,7 @@ pub async fn main() -> anyhow::Result<()> {
     .await;
 
     async {
-        let (run_mode, subcriptions) = parse_args_config(args, config?)?;
+        let (run_mode, subscriptions) = parse_args_config(args, config?)?;
         let db = setup_db(&data_path).await?;
         let mut scheduler = Scheduler::new();
         let runner = Gemma3VisionRunner::default().await?;
@@ -89,15 +90,11 @@ pub async fn main() -> anyhow::Result<()> {
         event!(Level::INFO, "run mode: {run_mode:?}");
         match run_mode {
             config::RunMode::Oneshot => {
-                for sub in subcriptions.as_ref() {
+                for sub in subscriptions.as_ref() {
                     event!(Level::INFO, "checking subscription {sub:?}");
                     let feed = create_feed(sub)?;
-                    let metadata = feed.get_metadata().await?;
                     let _sc = scheduler
-                        .add_schedule(
-                            ScheduleTrigger::Interval(Duration::ZERO),
-                            metadata.name.to_string(),
-                        )
+                        .add_schedule(ScheduleTrigger::Interval(Duration::ZERO), sub.clone())
                         .await?;
                     let decider = LlmConditionMatcher::new(
                         &runner,
@@ -105,8 +102,8 @@ pub async fn main() -> anyhow::Result<()> {
                         SqliteDecisionMemory::new(db.clone(), &data_path)?,
                     );
                     let persistence = AcceptUpdatePersistence::new();
-                    let updates =
-                        check_feed(&metadata.name, &feed, &decider, &scheduler, persistence);
+                    // TODO:oneshot should return immediately when there is no new update
+                    let updates = check_feed(sub, &feed, &decider, &scheduler, persistence);
                     pin_mut!(updates);
                     let mut stdout_guard = stdout().lock();
                     if let Some(result) = updates.next().await {
@@ -124,11 +121,84 @@ pub async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-            config::RunMode::Daemon {
-                schedules: triggers,
-            } => todo!(),
-        }
+            config::RunMode::Daemon { schedules } => {
+                let scheduler = schedules
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, s)| {
+                        Ok(polling::Schedule::new(
+                            id,
+                            subscriptions
+                                .as_ref()
+                                .get(s.for_ - 1)
+                                .cloned()
+                                .ok_or(anyhow!(
+                                    "schedule {} looks for subscription {} but not found",
+                                    id + 1,
+                                    s.for_
+                                ))?,
+                            s.trigger,
+                        )?)
+                    })
+                    .collect::<anyhow::Result<Scheduler<_>>>()?;
+                future::try_join_all(subscriptions.as_ref().iter().enumerate().map(
+                    async |(sub_id, sub)| -> anyhow::Result<()> {
+                        async {
+                            event!(Level::INFO, "registered subscription {sub:?}");
 
+                            let feed = create_feed(sub)?;
+                            let decider = LlmConditionMatcher::new(
+                                &runner,
+                                sub.condition.clone(),
+                                SqliteDecisionMemory::new(db.clone(), data_path.clone())?,
+                            );
+                            let persistence = SqliteUpdatePersistence::new(db.clone(), {
+                                let mut hasher = DefaultHasher::new();
+                                sub.hash(&mut hasher);
+                                format!("{:x}", hasher.finish())
+                            })?;
+                            let updates = check_feed(sub, &feed, &decider, &scheduler, persistence);
+                            pin_mut!(updates);
+                            while let Some(result) = updates.next().await {
+                                match result {
+                                    Ok((task, is_truthy)) => {
+                                        let mut stdout_guard = stdout().lock();
+                                        if is_truthy {
+                                            write!(&mut stdout_guard, "{sub_id}")?;
+                                            if let Ok(metadata) = feed.get_metadata().await {
+                                                write!(&mut stdout_guard, "\t{}", metadata.name)?;
+                                            }
+                                            writeln!(&mut stdout_guard)?;
+                                        } else {
+                                            event!(
+                                                Level::INFO,
+                                                "the LLM decided that an update for {} is stasis",
+                                                task.schedule().key()
+                                            );
+                                        }
+                                    }
+                                    Err(err) => {
+                                        if let Ok(metadata) = feed.get_metadata().await {
+                                            event!(
+                                                Level::ERROR,
+                                                "failed to poll update, checking feed {:?}: {err}",
+                                                metadata.name
+                                            );
+                                        } else {
+                                            event!(Level::ERROR, "failed to poll update: {err}");
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(())
+                        }
+                        .instrument(info_span!("daemon", sub = sub_id))
+                        .await
+                    },
+                ))
+                .await?;
+            }
+        }
         Ok(())
     }
     .instrument(debug_span!("run"))
@@ -166,12 +236,12 @@ fn create_feed(sub: &Subscription) -> anyhow::Result<RssFeed> {
 }
 
 fn check_feed<'f, Item, FeedError, Feed_, DeciderError, Decider_, PersistenceError, Persistence>(
-    key: &str,
+    key: &'f Subscription,
     feed: &'f Feed_,
     decider: &'f Decider_,
-    scheduler: &Scheduler<String>,
+    scheduler: &Scheduler<Subscription>,
     persistence: Persistence,
-) -> impl Stream<Item = anyhow::Result<(Task<String>, bool)>>
+) -> impl Stream<Item = anyhow::Result<(Task<Subscription>, bool)>>
 where
     Item: LlmComprehendable + Hash + Serialize + DeserializeOwned + Send + Sync + Unpin + 'static,
     FeedError: Display,
@@ -182,11 +252,11 @@ where
     Persistence: UpdatePersistence<Item = Item, Error = PersistenceError>,
 {
     scheduler
-        .start_polling(Some(key.to_string()))
+        .start_polling(Some(key))
         .wake_update(feed, persistence)
         .map_ok(move |(update, task)| {
             event!(
-                Level::INFO,
+                Level::DEBUG,
                 "woke for update, schedule id = {}, key = {}",
                 task.schedule().id(),
                 task.schedule().key()
@@ -195,7 +265,7 @@ where
         })
         .map_err(|err| anyhow!("update error: {err}"))
         .then(
-            async move |result| -> anyhow::Result<(Task<String>, bool)> {
+            async move |result| -> anyhow::Result<(Task<Subscription>, bool)> {
                 match result {
                     Ok((update, task)) => {
                         let Some(material) = update else {
@@ -223,14 +293,14 @@ fn parse_args_config(
                 let headers = if headers.is_empty() {
                     None
                 } else {
-                    Some(HashMap::from_iter(
+                    Some(BTreeMap::from_iter(
                         headers
                             .into_iter()
                             .map(|v| {
                                 let Some((k, v)) = v.split_once(": ") else {
                                     return Err(anyhow!("invalid header format: {v}"));
                                 };
-                                Ok((k.to_string(), v.to_string()))
+                                Ok((k.to_smolstr(), v.to_smolstr()))
                             })
                             .collect::<Result<Vec<_>, _>>()?,
                     ))
@@ -241,10 +311,10 @@ fn parse_args_config(
                         .zip(conditions.into_iter())
                         .map(|(url, condition)| Subscription {
                             feed: config::Feed::Rss {
-                                url,
+                                url: url.into(),
                                 headers: headers.clone(),
                             },
-                            condition,
+                            condition: condition.to_smolstr(),
                         })
                         .collect(),
                 ))

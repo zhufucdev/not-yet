@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScheduleTrigger {
+    #[serde(rename = "cron")]
     Cron(String),
+    #[serde(rename = "interval", with = "humantime_serde")]
     Interval(Duration),
 }
 

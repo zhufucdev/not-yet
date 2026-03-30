@@ -7,6 +7,7 @@ use serde_with::serde_as;
 use smol_str::SmolStr;
 use std::str::FromStr;
 use thiserror::Error;
+use tokio::sync::RwLock;
 use tracing::{Instrument, Level, event, info_span};
 
 use reqwest::header::{HeaderMap, HeaderName};
@@ -21,6 +22,7 @@ use crate::{
 pub struct RssFeed {
     url: String,
     client: reqwest::Client,
+    cache: RwLock<Option<Channel>>,
 }
 
 #[serde_as]
@@ -54,6 +56,7 @@ impl RssFeed {
         Ok(Self {
             url: url.to_string(),
             client,
+            cache: RwLock::new(None),
         })
     }
 
@@ -61,7 +64,12 @@ impl RssFeed {
         let span = info_span!("rss_feed.get_rss_channel");
         async move {
             event!(Level::INFO, "fetching URL {}", self.url);
-            let resposne = self.client.get(&self.url).send().await?;
+            let resposne = self
+                .client
+                .get(&self.url)
+                .send()
+                .await?
+                .error_for_status()?;
             event!(
                 Level::INFO,
                 "got status {}, content type {}",
@@ -72,8 +80,9 @@ impl RssFeed {
                     .map(|h| h.to_str().unwrap_or_default())
                     .unwrap_or_default()
             );
-            let response = resposne.error_for_status_ref()?;
-            Ok(Channel::from_str(resposne.text().await?.as_ref())?)
+            let channel = Channel::from_str(resposne.text().await?.as_ref())?;
+            *self.cache.write().await = Some(channel.clone());
+            Ok(channel)
         }
         .instrument(span)
         .await
@@ -84,8 +93,12 @@ impl Feed for RssFeed {
     type Metadata = DefaultMetadata;
 
     async fn get_metadata(&self) -> Result<Self::Metadata, Self::Error> {
-        let channel = self.get_rss_channel().await?;
-        Ok(DefaultMetadata::new(channel.title, Some("RSS feed".into())))
+        let title = if let Some(channel) = self.cache.read().await.as_ref() {
+            channel.title().to_string()
+        } else {
+            self.get_rss_channel().await?.title().to_string()
+        };
+        Ok(DefaultMetadata::new(title, Some("RSS feed".into())))
     }
 }
 

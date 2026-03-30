@@ -9,7 +9,7 @@ use async_stream::stream;
 use chrono::{DateTime, Utc};
 use futures::Stream;
 use tokio::sync::{RwLock, broadcast};
-use tracing::{Instrument, Level, Span, debug_span, event, info_span, warn_span};
+use tracing::{Instrument, Level, Span, debug_span, event, info_span};
 
 use crate::polling::{
     KeyContract,
@@ -81,7 +81,7 @@ impl<K: KeyContract> Scheduler<K> {
     pub async fn add_schedule(
         &mut self,
         trigger: ScheduleTrigger,
-        data: K,
+        key: K,
     ) -> Result<Arc<Schedule<K>>, cron::error::Error> {
         let span = info_span!("scheduler.add_schedule");
         async {
@@ -92,13 +92,7 @@ impl<K: KeyContract> Scheduler<K> {
                 .map(|s| s.id)
                 .unwrap_or_default()
                 + 1;
-            let s = Arc::new(Schedule {
-                id,
-                last_run: None,
-                trigger: trigger.try_into()?,
-                key: data.clone(),
-                trace_span: debug_span!("schedule", id = id, data = ?data),
-            });
+            let s = Arc::new(Schedule::new(id, key, trigger)?);
             self.schedules.push(s.clone());
             event!(
                 Level::DEBUG,
@@ -146,12 +140,12 @@ impl<K: KeyContract> Scheduler<K> {
     /// In this case, receiver can choose to keep polling.
     pub fn start_polling(
         &self,
-        key: Option<K>,
+        key: Option<impl AsRef<K>>,
     ) -> impl Stream<Item = Result<Task<K>, TaskCancellationError>> {
         stream! {
             loop {
                 let mut rx = self.schedules_notify.0.subscribe();
-                let expected_next = if let Some(key) = key.as_ref() {
+                let expected_next = if let Some(key) = key.as_ref().map(|k| k.as_ref()) {
                     let mut guard = self.task_queue.write().await;
                     let local_queue = guard.get_mut(key).unwrap();
                     local_queue.pop()
@@ -170,7 +164,7 @@ impl<K: KeyContract> Scheduler<K> {
                 tokio::select! {
                     schedule = rx.recv() => {
                         if let Ok(schedule) = schedule
-                            && key.as_ref().is_none_or(|k| schedule.key() == k)
+                            && key.as_ref().is_none_or(|k| schedule.key() == k.as_ref())
                             && schedule.get_next_run_time().is_some_and(|t| t < expected_next.due_time())
                         {
                             yield Err(TaskCancellationError)
@@ -204,6 +198,16 @@ impl<K: KeyContract> Schedule<K> {
             _ScheduleTrigger::Cron(schedule) => schedule.upcoming(Utc).next(),
             _ScheduleTrigger::Interval(duration) => Some(Utc::now() + *duration),
         }
+    }
+
+    pub fn new(id: usize, key: K, trigger: ScheduleTrigger) -> Result<Self, cron::error::Error> {
+        Ok(Self {
+            id,
+            last_run: None,
+            trigger: trigger.try_into()?,
+            key: key.clone(),
+            trace_span: debug_span!("schedule", id = id, key = ?key),
+        })
     }
 
     pub fn key(&self) -> &K {

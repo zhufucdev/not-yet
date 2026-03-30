@@ -1,5 +1,6 @@
-use serde::Deserialize;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use smol_str::SmolStr;
+use std::{collections::BTreeMap, fmt::Display};
 
 use crate::polling::trigger::ScheduleTrigger;
 
@@ -25,17 +26,29 @@ pub struct Schedule {
     pub for_: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Subscription {
     pub feed: Feed,
-    pub condition: String,
+    pub condition: SmolStr,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum Feed {
     #[serde(rename = "rss")]
     Rss {
-        url: String,
-        headers: Option<HashMap<String, String>>,
+        url: SmolStr,
+        headers: Option<BTreeMap<SmolStr, SmolStr>>,
     },
+}
+
+impl AsRef<Subscription> for &Subscription {
+    fn as_ref(&self) -> &Subscription {
+        self
+    }
+}
+
+impl Display for Subscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }

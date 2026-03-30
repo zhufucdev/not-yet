@@ -60,7 +60,9 @@ where
 
     async fn push(&mut self, decision: Decision<Self::Material>) -> Result<(), Self::Error> {
         let material_binary = rmp_serde::to_vec(&decision.material)?;
-        let shasum = format!("{:x?}", Sha256::digest(&material_binary));
+        let shasum = Sha256::digest(&material_binary)
+            .map(|b| format!("{:x}", b))
+            .join("");
         let material_fp = self.material_dir.join(&shasum);
         futures::future::try_join(
             async || -> Result<(), Self::Error> {
