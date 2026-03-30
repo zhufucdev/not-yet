@@ -12,10 +12,10 @@ mod source;
 mod update;
 mod error;
 
-#[cfg(feature = "tgbot")]
+#[cfg(feature = "bot")]
 use bot as flavor;
 
-#[cfg(not(feature = "tgbot"))]
+#[cfg(not(feature = "bot"))]
 use cli as flavor;
 
 #[tokio::main(flavor = "multi_thread")]

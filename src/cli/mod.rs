@@ -40,18 +40,7 @@ mod config;
 pub async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(if args.verbose {
-                    "not_yet=debug".parse().unwrap()
-                } else {
-                    LevelFilter::ERROR.into()
-                })
-                .from_env()
-                .unwrap(),
-        )
-        .with_level(true)
-        .finish()
+        .with_max_level(args.verbosity)
         .init();
 
     let Some(data_path) = args

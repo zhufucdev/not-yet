@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use clap_verbosity_flag::Verbosity;
 
 #[derive(Debug, Parser)]
 pub struct Args {
@@ -10,8 +11,8 @@ pub struct Args {
     #[clap(short, long)]
     pub config: Option<PathBuf>,
 
-    #[clap(short, long)]
-    pub verbose: bool,
+    #[command(flatten)]
+    pub verbosity: Verbosity,
 
     /// Override the run mode specified by configuration,
     /// usually used for testing
