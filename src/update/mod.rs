@@ -119,11 +119,11 @@ where
                     match fut.borrow_mut().poll_unpin(cx) {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(Err(e)) => {
+                            *this.state.borrow_mut() = UpdateState::Idle;
                             return Poll::Ready(Some(Err(Error::Persistence(e))));
                         }
                         Poll::Ready(Ok(true)) => {
                             *this.state.borrow_mut() = UpdateState::Idle;
-                            return Poll::Pending;
                         }
                         Poll::Ready(Ok(false)) => {
                             let items_cp = items.clone();
@@ -137,17 +137,21 @@ where
                     }
                 }
 
-                UpdateState::Updating { items, fut, data } => match fut.borrow_mut().poll_unpin(cx)
-                {
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(Error::Persistence(e)))),
-                    Poll::Ready(Ok(())) => {
-                        let fut: Arc<RefCell<BoxFuture<_>>> = Arc::new(RefCell::new(Box::pin(
-                            async move { items.write().await.pop() },
-                        )));
-                        *this.state.borrow_mut() = UpdateState::Updated { fut, data };
+                UpdateState::Updating { items, fut, data } => {
+                    match fut.borrow_mut().poll_unpin(cx) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Err(e)) => {
+                            return Poll::Ready(Some(Err(Error::Persistence(e))));
+                        }
+                        Poll::Ready(Ok(())) => {
+                            let fut: Arc<RefCell<BoxFuture<_>>> =
+                                Arc::new(RefCell::new(Box::pin(async move {
+                                    items.write().await.pop()
+                                })));
+                            *this.state.borrow_mut() = UpdateState::Updated { fut, data };
+                        }
                     }
-                },
+                }
 
                 UpdateState::Updated { fut, data } => match fut.borrow_mut().poll_unpin(cx) {
                     Poll::Ready(it) => {
