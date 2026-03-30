@@ -1,9 +1,8 @@
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
-use thiserror::Error;
 
-use crate::update::UpdatePersistence;
+use crate::{error::NaE, update::UpdatePersistence};
 
 pub struct AcceptUpdatePersistence<I> {
     _marker: PhantomData<I>,
@@ -24,7 +23,7 @@ where
 {
     type Item = I;
 
-    type Error = Non;
+    type Error = NaE;
 
     async fn update(&self, _item: Option<&Self::Item>) -> Result<(), Self::Error> {
         Ok(())
@@ -34,7 +33,3 @@ where
         Ok(false)
     }
 }
-
-#[derive(Debug, Error)]
-#[error("this should never happen, logic is flawed")]
-pub struct Non;

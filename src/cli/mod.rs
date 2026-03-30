@@ -25,6 +25,7 @@ use crate::{
         args::Args,
         config::{Config, RunMode, Subscription},
     },
+    llm::timeout::{ModelProducer, TimedModel},
     polling::{self, Scheduler, schedule, task::Task, trigger::ScheduleTrigger},
     source::{Feed, LlmComprehendable, LlmRssItem, RssFeed},
     update::{
@@ -82,10 +83,14 @@ pub async fn main() -> anyhow::Result<()> {
     .await;
 
     async {
-        let (run_mode, subscriptions) = parse_args_config(args, config?)?;
+        let model = TimedModel::new(
+            "decider_vlm",
+            config.as_ref().unwrap().drop_model_in.clone(),
+            ModelProducer::new(|| async { Gemma3VisionRunner::default().await }),
+        );
         let db = setup_db(&data_path).await?;
         let mut scheduler = Scheduler::new();
-        let runner = Gemma3VisionRunner::default().await?;
+        let (run_mode, subscriptions) = parse_args_config(args, config?)?;
 
         event!(Level::INFO, "run mode: {run_mode:?}");
         match run_mode {
@@ -97,7 +102,7 @@ pub async fn main() -> anyhow::Result<()> {
                         .add_schedule(ScheduleTrigger::Interval(Duration::ZERO), sub.clone())
                         .await?;
                     let decider = LlmConditionMatcher::new(
-                        &runner,
+                        model.clone(),
                         &sub.condition,
                         SqliteDecisionMemory::new(db.clone(), &data_path)?,
                     );
@@ -148,7 +153,7 @@ pub async fn main() -> anyhow::Result<()> {
 
                             let feed = create_feed(sub)?;
                             let decider = LlmConditionMatcher::new(
-                                &runner,
+                                model.clone(),
                                 sub.condition.clone(),
                                 SqliteDecisionMemory::new(db.clone(), data_path.clone())?,
                             );

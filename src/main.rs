@@ -4,11 +4,13 @@ use tracing::error_span;
 mod agent;
 mod bot;
 mod cli;
+mod llm;
 mod polling;
 mod secure;
 mod serde_utils;
 mod source;
 mod update;
+mod error;
 
 #[cfg(feature = "tgbot")]
 use bot as flavor;

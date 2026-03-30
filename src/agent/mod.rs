@@ -6,7 +6,7 @@ use crate::{
         memory::{Decision, DecisionMemory},
         template::{AsBorrowedMessages, BorrowImageOwnText, PromptMacros},
     },
-    secure,
+    llm, secure,
     source::LlmComprehendable,
 };
 use chrono::Utc;
@@ -25,37 +25,35 @@ pub trait Decider {
     async fn get_truth_value(&self, update: Self::Material) -> Result<bool, Self::Error>;
 }
 
-pub struct LlmConditionMatcher<'r, Runner, Memory> {
-    runner: &'r Runner,
+pub struct LlmConditionMatcher<Model, Memory> {
+    model: Model,
     condition: String,
     memory: Rc<RefCell<Memory>>,
 }
 
-impl<'r, Runner, Memory> LlmConditionMatcher<'r, Runner, Memory> {
-    pub fn new(runner: &'r Runner, condition: impl ToString, memory: Memory) -> Self {
+impl<Model, Memory> LlmConditionMatcher<Model, Memory> {
+    pub fn new(model: Model, condition: impl ToString, memory: Memory) -> Self {
         Self {
-            runner,
+            model,
             condition: condition.to_string(),
             memory: Rc::new(RefCell::new(memory)),
         }
     }
 }
 
-impl<'r, Runner, Update, Memory> Decider for LlmConditionMatcher<'r, Runner, Memory>
+impl<Model, Runner, Update, Memory> Decider for LlmConditionMatcher<Model, Memory>
 where
-    for<'req> Runner: VisionLmRunner<'r, 'req>,
+    Model: llm::Model<Runner = Runner>,
+    for<'r, 'req> Runner: VisionLmRunner<'r, 'req> + 'static,
     Update: LlmComprehendable,
     Memory: DecisionMemory<Material = Update>,
 {
     type Material = Update;
-    type Error = GetTruthValueError<Memory::Error>;
+    type Error = GetTruthValueError<Model::Error, Memory::Error>;
 
-    async fn get_truth_value(
-        &self,
-        update: Update,
-    ) -> Result<bool, GetTruthValueError<Memory::Error>> {
+    async fn get_truth_value(&self, update: Update) -> Result<bool, Self::Error> {
         let inference_span = info_span!("condition_matcher.get_truth_value.inference");
-        let response: Result<String, GetTruthValueError<Memory::Error>> = async {
+        let response: Result<String, Self::Error> = async {
             let mem = self.memory.borrow();
             let stream = mem
                 .iter_newest_first()
@@ -107,7 +105,12 @@ where
                 )
                 .unwrap()
             };
-            let res = self.runner.get_vlm_response(VisionLmRequest {
+            let runner = self
+                .model
+                .get_runner()
+                .await
+                .map_err(GetTruthValueError::Model)?;
+            let res = runner.get_vlm_response(VisionLmRequest {
                 messages: messages.as_ref_msg(),
                 prefill: Some("<think>\n".into()),
                 ..Default::default()
@@ -160,16 +163,15 @@ mod test {
     use serde_json::json;
     use tracing_test::traced_test;
 
-    use crate::{agent::memory::debug::DebugDecisionMemory, source::DefaultUpdate};
+    use crate::{agent::memory::debug::DebugDecisionMemory, llm::owned::OwnedModel, source::DefaultUpdate};
 
     use super::*;
 
     #[tokio::test]
     #[traced_test]
     async fn test_condition_matcher() {
-        let runner = Gemma3VisionRunner::default().await.unwrap();
         let matcher = LlmConditionMatcher::new(
-            &runner,
+            OwnedModel::new(Gemma3VisionRunner::default().await.unwrap()),
             "there has been at least 2 chapters since last time or ever",
             DebugDecisionMemory::<DefaultUpdate>::new(),
         );

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
-use std::{collections::BTreeMap, fmt::Display};
+use std::{collections::BTreeMap, fmt::Display, time::Duration};
 
 use crate::polling::trigger::ScheduleTrigger;
 
@@ -9,6 +9,12 @@ pub struct Config {
     pub mode: RunMode,
     #[serde(rename = "subscription")]
     pub subscriptions: Vec<Subscription>,
+    #[serde(default = "default_drop_model_timeout")]
+    pub drop_model_in: Duration,
+}
+
+fn default_drop_model_timeout() -> Duration {
+    Duration::from_mins(5)
 }
 
 #[derive(Debug, Deserialize)]
