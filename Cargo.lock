@@ -2572,6 +2572,90 @@ dependencies = [
 ]
 
 [[package]]
+name = "lib-bot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clap-verbosity-flag",
+ "futures",
+ "itertools 0.14.0",
+ "lib-common",
+ "migration",
+ "priority-authenticator",
+ "reqwest 0.13.2",
+ "sea-orm",
+ "serde",
+ "smol_str",
+ "teloxide",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lib-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clap-verbosity-flag",
+ "futures",
+ "humantime-serde",
+ "lib-common",
+ "llama-runner",
+ "migration",
+ "reqwest 0.13.2",
+ "sea-orm",
+ "serde",
+ "serde_with",
+ "smol_str",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lib-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "atom_syndication",
+ "chrono",
+ "cron",
+ "dirs",
+ "encoding_rs",
+ "escaping",
+ "futures",
+ "humantime-serde",
+ "image",
+ "llama-runner",
+ "migration",
+ "pin-project-lite",
+ "quick-xml 0.39.2",
+ "rand 0.10.0",
+ "reqwest 0.13.2",
+ "rmp-serde",
+ "rss",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha2 0.11.0",
+ "smol_str",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-test",
+ "trait-variant",
+ "uuid",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2926,42 +3010,12 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 name = "not_yet"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "atom_syndication",
- "chrono",
- "clap",
- "clap-verbosity-flag",
- "cron",
- "dirs",
- "encoding_rs",
- "escaping",
- "futures",
- "humantime-serde",
- "image",
- "llama-runner",
- "migration",
- "pin-project-lite",
- "quick-xml 0.39.2",
- "rand 0.10.0",
- "reqwest 0.13.2",
- "rmp-serde",
- "rss",
- "sea-orm",
- "serde",
- "serde_json",
- "serde_with",
- "sha2 0.11.0",
- "smol_str",
- "teloxide",
- "thiserror 2.0.18",
+ "lib-bot",
+ "lib-cli",
+ "lib-common",
  "tokio",
- "toml",
  "tracing",
  "tracing-subscriber",
- "tracing-test",
- "uuid",
 ]
 
 [[package]]
@@ -3421,6 +3475,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "priority-authenticator"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
  "syn 2.0.117",
 ]
 
@@ -5128,6 +5191,7 @@ dependencies = [
  "serde",
  "serde_json",
  "teloxide-core",
+ "teloxide-macros",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -5165,6 +5229,18 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "teloxide-macros"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "300fadcaf0c182f19b5ca10bf23a45dc9a48925f00c704405fd90ee2c03942f9"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -5567,6 +5643,17 @@ version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad06847b7afb65c7866a36664b75c40b895e318cea4f71299f013fb22965329d"
 dependencies = [
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "trait-variant"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70977707304198400eb4835a78f6a9f928bf41bba420deb8fdb175cd965d77a7"
+dependencies = [
+ "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]

@@ -1,0 +1,28 @@
+[package]
+name = "lib-bot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lib-common = { path = "../lib-common" }
+migration = { path = "../migration" }
+priority-authenticator = { path = "../priority-authenticator" }
+clap = { version = "4.6.0", features = ["derive"] }
+clap-verbosity-flag = { version = "3.0.4", features = ["tracing"] }
+teloxide = { version = "0.17.0", features = ["macros"], optional = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+sea-orm.workspace = true
+smol_str.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+itertools = "0.14.0"
+futures.workspace = true
+reqwest.workspace = true
+
+[features]
+cuda = ["lib-common/cuda"]
+metal = ["lib-common/metal"]
+telegram = ["dep:teloxide"]

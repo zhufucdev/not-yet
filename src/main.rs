@@ -1,22 +1,11 @@
 use std::process::exit;
 use tracing::error_span;
 
-mod agent;
-mod bot;
-mod cli;
-mod llm;
-mod polling;
-mod secure;
-mod serde_utils;
-mod source;
-mod update;
-mod error;
-
 #[cfg(feature = "bot")]
-use bot as flavor;
+use lib_bot as flavor;
 
 #[cfg(not(feature = "bot"))]
-use cli as flavor;
+use lib_cli as flavor;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
