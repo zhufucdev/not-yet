@@ -10,8 +10,7 @@ use crate::{
     agent::memory::{
         Decision, DecisionMemory,
         sqlite::{SqliteDecisionMemory, error::CreateDecisionMemoryError},
-    },
-    source::LlmComprehendable,
+    }, llm::SharedImageOrText, source::LlmComprehendable
 };
 
 use super::{decision, material};
@@ -30,8 +29,8 @@ struct MockRssItem {
 impl LlmComprehendable for MockRssItem {
     const KIND: Option<material::Kind> = Some(material::Kind::RssItem);
 
-    fn get_message<'s>(&'s self) -> Vec<ImageOrText<'s>> {
-        vec![ImageOrText::Text(self.title.as_str())]
+    fn get_message<'s>(&'s self) -> Vec<SharedImageOrText> {
+        vec![self.title.as_str().into()]
     }
 }
 
@@ -39,7 +38,7 @@ impl LlmComprehendable for MockRssItem {
 struct NoKindItem;
 
 impl LlmComprehendable for NoKindItem {
-    fn get_message<'s>(&'s self) -> Vec<ImageOrText<'s>> {
+    fn get_message<'s>(&'s self) -> Vec<SharedImageOrText> {
         vec![]
     }
 }
