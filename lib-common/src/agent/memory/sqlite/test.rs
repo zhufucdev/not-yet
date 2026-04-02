@@ -117,6 +117,7 @@ async fn push_succeeds() {
     let db = in_memory_db().await;
     let mut mem = SqliteDecisionMemory::<MockRssItem> {
         db,
+        agent_id: None,
         _marker: std::marker::PhantomData,
         material_dir: temp_dir(),
     };
@@ -138,6 +139,7 @@ async fn iter_newest_first_panics_until_into_decision_implemented() {
     let db = in_memory_db().await;
     let mut mem = SqliteDecisionMemory::<MockRssItem> {
         db,
+        agent_id: None,
         _marker: std::marker::PhantomData,
         material_dir: temp_dir(),
     };
@@ -179,6 +181,7 @@ async fn clear_yields_empty_iter() {
     let db = in_memory_db().await;
     let mut mem = SqliteDecisionMemory::<MockRssItem> {
         db,
+        agent_id: None,
         _marker: std::marker::PhantomData,
         material_dir: temp_dir(),
     };
