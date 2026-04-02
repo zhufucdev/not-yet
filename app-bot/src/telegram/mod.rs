@@ -140,11 +140,11 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
     dptree::entry()
         .branch(
             Update::filter_callback_query()
+                .enter_dialogue::<CallbackQuery, InMemStorage<State>, State>()
                 .branch(
                     dptree::case![State::ChoosingSubscriptionKind]
                         .endpoint(chose_subscription_type),
                 )
-                .branch(dptree::case![State::GotRssUrl { url }].endpoint(receive_rss_condition))
                 .branch(
                     dptree::case![State::GotRssCondition { condition, url }]
                         .endpoint(choose_rss_mock_browser),
@@ -167,15 +167,14 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         .branch(dptree::case![Command::Start].endpoint(start)),
                 )
                 .branch(dptree::case![State::Authenticating].endpoint(authenticate))
+                .branch(dptree::case![State::GotRssUrl { url }].endpoint(receive_rss_condition))
                 .branch(
-                    dptree::case![State::GotRssUrl { url }]
-                        .endpoint(receive_rss_condition)
-                        .branch(dptree::case![State::GotRssMockBrowserUa {
-                            mock,
-                            condition,
-                            url
-                        }])
-                        .endpoint(receive_rss_custom_headers),
+                    dptree::case![State::GotRssMockBrowserUa {
+                        mock,
+                        condition,
+                        url
+                    }]
+                    .endpoint(receive_rss_custom_headers),
                 ),
         )
 }

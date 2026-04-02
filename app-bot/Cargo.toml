@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 lib-common = { path = "../lib-common" }
 app-common = { path = "../app-common" }
-migration = { path = "../migration" }
+migration = { path = "../migration", features = ["bot"]}
 priority-authenticator = { path = "../priority-authenticator" }
 clap = { version = "4.6.0", features = ["derive"] }
 clap-verbosity-flag = { version = "3.0.4", features = ["tracing"] }
