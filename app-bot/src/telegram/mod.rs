@@ -167,6 +167,7 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         .branch(dptree::case![Command::Start].endpoint(start)),
                 )
                 .branch(dptree::case![State::Authenticating].endpoint(authenticate))
+                .branch(dptree::case![State::ChoseRss].endpoint(receive_rss_url))
                 .branch(dptree::case![State::GotRssUrl { url }].endpoint(receive_rss_condition))
                 .branch(
                     dptree::case![State::GotRssMockBrowserUa {
