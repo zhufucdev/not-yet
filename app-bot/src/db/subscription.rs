@@ -37,10 +37,10 @@ pub enum Kind {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-impl ActiveModelEx {
+impl ModelEx {
     pub fn schedule_trigger(&self) -> ScheduleTrigger {
-        if let Some(interval_mins) = self.interval_mins.as_ref() {
-            ScheduleTrigger::Interval(Duration::from_mins(*interval_mins as u64))
+        if let Some(interval_mins) = self.interval_mins {
+            ScheduleTrigger::Interval(Duration::from_mins(interval_mins as u64))
         } else if let Some(cron) = self.cron.as_ref() {
             ScheduleTrigger::Cron(cron.to_string())
         } else {

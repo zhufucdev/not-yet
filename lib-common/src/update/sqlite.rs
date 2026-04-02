@@ -63,7 +63,7 @@ where
         ActiveModel::builder()
             .set_hash(hash as i64)
             .set_key(key)
-            .save(&db)
+            .insert(&db)
             .await?;
         Ok(())
     }

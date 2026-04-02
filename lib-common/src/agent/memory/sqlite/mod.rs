@@ -83,7 +83,7 @@ where
                             .set_kind(Self::Material::KIND.unwrap())
                             .set_shasum(shasum),
                     )
-                    .save(&self.db)
+                    .insert(&self.db)
                     .await?;
                 Ok(())
             }(),

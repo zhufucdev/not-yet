@@ -34,7 +34,7 @@ impl Authenticator for SqliteAuthenticator {
         user::ActiveModel::builder()
             .set_id(user_id)
             .set_access_level(access)
-            .save(&self.db)
+            .insert(&self.db)
             .await?;
         Ok(())
     }

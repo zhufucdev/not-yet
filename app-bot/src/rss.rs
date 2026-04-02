@@ -29,11 +29,10 @@ pub async fn add_rss_subscription_for(
                 .set_browser_ua(mock_browser)
                 .set_headers(extra_headers.map(|s| s.into())),
         )
-        .save(db)
+        .insert(db)
         .await?;
-    let sub_id = *sub.id.as_ref();
     scheduler
-        .add_schedule(sub.schedule_trigger(), sub_id)
+        .add_schedule(sub.schedule_trigger(), sub.id)
         .await
         .unwrap();
     Ok(())
