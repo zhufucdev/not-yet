@@ -5,7 +5,8 @@
       "type": "codelldb",
       "request": "launch",
       "name": "Launch Main",
-      "program": "${workspaceFolder}/target/debug/not_yet"
+      "program": "${workspaceFolder}/target/debug/not_yet",
+      "args": ["-vvvv"]
     }
   ]
 }

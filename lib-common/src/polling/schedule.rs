@@ -34,9 +34,15 @@ pub struct Scheduler<K: KeyContract> {
     schedules: Arc<RwLock<Vec<Arc<Schedule<K>>>>>,
     task_queue: Arc<RwLock<HashMap<K, BinaryHeap<Task<K>>>>>,
     schedules_notify: (
-        broadcast::Sender<Arc<Schedule<K>>>,
-        broadcast::Receiver<Arc<Schedule<K>>>,
+        broadcast::Sender<(QueueType, Arc<Schedule<K>>)>,
+        broadcast::Receiver<(QueueType, Arc<Schedule<K>>)>,
     ),
+}
+
+#[derive(Debug, Clone)]
+pub enum QueueType {
+    Exising,
+    New,
 }
 
 impl<K: KeyContract> FromIterator<Schedule<K>> for Scheduler<K> {
@@ -52,14 +58,12 @@ impl<K: KeyContract> FromIterator<Schedule<K>> for Scheduler<K> {
         let mut task_queue = HashMap::<K, BinaryHeap<Task<K>>>::new();
         for schedule in schedules.iter() {
             if let Some(ref mut bt) = task_queue.get_mut(schedule.key()) {
-                if let Some(task) = Task::for_next_schedule_run(schedule.clone()) {
-                    bt.push(task);
-                }
+                let task = Task::for_immediate_run(schedule.clone());
+                bt.push(task);
             } else {
                 let mut bt = BinaryHeap::new();
-                if let Some(task) = Task::for_next_schedule_run(schedule.clone()) {
-                    bt.push(task);
-                }
+                let task = Task::for_immediate_run(schedule.clone());
+                bt.push(task);
                 task_queue.insert(schedule.key().clone(), bt);
             };
         }
@@ -116,20 +120,25 @@ impl<K: KeyContract> Scheduler<K> {
         async {
             if let Some(t) = Task::for_next_schedule_run(schedule.clone()) {
                 let mut tq = self.task_queue.write().await;
-                if let Some(bt) = tq.get_mut(schedule.key()) {
-                    bt.push(t);
-                    event!(Level::DEBUG, "pushing task to queue");
-                } else {
-                    let mut bt = BinaryHeap::new();
-                    bt.push(t);
-                    tq.insert(schedule.key().clone(), bt);
-                    event!(Level::DEBUG, "created new task queue");
-                }
-                let send_result = self.schedules_notify.0.send(schedule.clone());
+                let queue_type = match tq.get_mut(schedule.key()) {
+                    Some(bt) => {
+                        bt.push(t);
+                        event!(Level::DEBUG, "pushing task to queue");
+                        QueueType::Exising
+                    }
+                    None => {
+                        let mut bt = BinaryHeap::new();
+                        bt.push(t);
+                        tq.insert(schedule.key().clone(), bt);
+                        event!(Level::DEBUG, "created new task queue");
+                        QueueType::New
+                    }
+                };
+                let send_result = self.schedules_notify.0.send((queue_type, schedule.clone()));
                 if let Err(err) = send_result {
                     event!(
                         Level::WARN,
-                        "failed to send schedule to task queue: {}",
+                        "failed to send reschedule notifiction to task queue: {}",
                         err.to_string()
                     );
                 }
@@ -168,7 +177,7 @@ impl<K: KeyContract> Scheduler<K> {
                 span.in_scope(|| event!(Level::DEBUG, "waiting for next run"));
                 tokio::select! {
                     schedule = reschedule_rx.recv() => {
-                        if let Ok(schedule) = schedule
+                        if let Ok((_, schedule)) = schedule
                             && key.is_none_or(|k| schedule.key() == k)
                             && schedule.get_next_run_time().is_some_and(|t| t < expected_next.due_time())
                         {
@@ -194,9 +203,11 @@ impl<K: KeyContract> Scheduler<K> {
         self.schedules.read().await.to_vec()
     }
 
-    pub async fn until_next_reschedule(&self) -> Result<(), RecvError> {
-        self.schedules_notify.0.subscribe().recv().await?;
-        Ok(())
+    pub async fn until_next_reschedule(&self) -> Result<QueueType, RecvError> {
+        let mut rx = self.schedules_notify.0.subscribe();
+
+        while rx.try_recv().is_ok() {}
+        Ok(rx.recv().await?.0)
     }
 }
 

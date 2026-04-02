@@ -12,7 +12,7 @@ use lib_common::{
         Model,
         timeout::{ModelProducer, TimedModel},
     },
-    polling::{Schedule, Scheduler, task::Task},
+    polling::{Schedule, Scheduler, schedule::QueueType, task::Task},
     source::{Feed, RssFeed},
     update::sqlite::SqliteUpdatePersistence,
 };
@@ -66,6 +66,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     tracing_subscriber::fmt()
         .with_max_level(args.verbosity)
+        .with_env_filter("lib_common=trace,app_common=trace,app_bot=trace")
         .init();
     let data_path = args.config.parse_config()?;
     let config = app_common::config::parse_config::<Config>(
@@ -86,7 +87,12 @@ pub(super) async fn main() -> anyhow::Result<()> {
     let token = OnetimeToken::new();
     println!("access token: {}", token.value().await);
     let db = app_common::config::setup_db(&data_path).await?;
-    let scheduler = Arc::new(Scheduler::<SubscriptionId>::new());
+    let scheduler = Arc::new(
+        get_schedules(&db)
+            .await?
+            .into_iter()
+            .collect::<Scheduler<SubscriptionId>>(),
+    );
 
     future::select(
         Box::pin(
@@ -124,7 +130,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
                             );
                             tokio::time::sleep(Duration::from_secs(30)).await;
                         },
-                        _ = scheduler.until_next_reschedule() => {},
+                        Ok(QueueType::New) = scheduler.until_next_reschedule() => {},
                     }
                 }
             }
@@ -245,6 +251,17 @@ async fn start_polling_all(
     });
     future::try_join_all(tasks).await?;
     Ok(())
+}
+
+async fn get_schedules(
+    db: &DatabaseConnection,
+) -> Result<impl IntoIterator<Item = Schedule<SubscriptionId>>, sea_orm::DbErr> {
+    Ok(subscription::Entity::find()
+        .all(db)
+        .await?
+        .into_iter()
+        .enumerate()
+        .map(|(id, s)| Schedule::new(id, s.id, s.schedule_trigger()).unwrap()))
 }
 
 async fn start(

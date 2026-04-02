@@ -140,6 +140,7 @@ where
                     match fut.borrow_mut().poll_unpin(cx) {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(Err(e)) => {
+                            *this.state.borrow_mut() = UpdateState::Idle;
                             return Poll::Ready(Some(Err(Error::Persistence(e))));
                         }
                         Poll::Ready(Ok(())) => {

@@ -43,6 +43,14 @@ impl<K: KeyContract> Task<K> {
         })
     }
 
+    pub fn for_immediate_run(schedule: Arc<Schedule<K>>) -> Self {
+        Self {
+            schedule,
+            state: Arc::new(RwLock::new(TaskState::Pending)),
+            due_time: Utc::now(),
+        }
+    }
+
     pub fn due_time(&self) -> DateTime<Utc> {
         self.due_time
     }

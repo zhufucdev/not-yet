@@ -69,8 +69,11 @@ impl RssFeed {
                 .client
                 .get(&self.url)
                 .send()
-                .await?
-                .error_for_status()?;
+                .await
+                .inspect(|v| event!(Level::DEBUG, "HTTP response: {v:?}"))
+                .inspect_err(|err| event!(Level::ERROR, "IO failed: {err}"))?
+                .error_for_status()
+                .inspect_err(|err| event!(Level::ERROR, "status error: {err}"))?;
             event!(
                 Level::INFO,
                 "got status {}, content type {}",
