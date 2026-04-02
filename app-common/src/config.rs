@@ -7,13 +7,13 @@ use tracing::{Instrument, Level, debug_span, event};
 
 pub trait ParseConfigPath {
     type Error;
-    fn parse(&self) -> Result<PathBuf, Self::Error>;
+    fn parse_config(&self) -> Result<PathBuf, Self::Error>;
 }
 
 impl ParseConfigPath for Option<PathBuf> {
     type Error = anyhow::Error;
 
-    fn parse(&self) -> Result<PathBuf, Self::Error> {
+    fn parse_config(&self) -> Result<PathBuf, Self::Error> {
         self.as_ref()
             .cloned()
             .or_else(|| dirs::config_dir())

@@ -1,20 +1,16 @@
 use std::{
     collections::BTreeMap,
-    fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     io::{Write, stdout},
-    path::Path,
     time::Duration,
 };
 
 use anyhow::{Context, anyhow};
+use app_common::config::ParseConfigPath;
 use clap::Parser;
-use futures::{Stream, StreamExt, TryStreamExt, future, pin_mut};
+use futures::{StreamExt, future, pin_mut};
 use llama_runner::Gemma3VisionRunner;
-use migration::{Migrator, MigratorTrait};
 use reqwest::header::HeaderMap;
-use sea_orm::{Database, DatabaseConnection};
-use serde::{Serialize, de::DeserializeOwned};
 use smol_str::ToSmolStr;
 use tracing::{Instrument, Level, debug_span, event, info_span};
 
@@ -23,15 +19,11 @@ use crate::{
     config::{Config, RunMode, Subscription},
 };
 use lib_common::{
-    agent::{Decider, LlmConditionMatcher, memory::sqlite::SqliteDecisionMemory},
-    config::ParseConfigPath,
+    agent::{LlmConditionMatcher, memory::sqlite::SqliteDecisionMemory},
     llm::timeout::{ModelProducer, TimedModel},
-    polling::{self, Scheduler, task::Task, trigger::ScheduleTrigger},
-    source::{Feed, LlmComprehendable, RssFeed},
-    update::{
-        UpdatePersistence, UpdateWakerExt, accept::AcceptUpdatePersistence,
-        sqlite::SqliteUpdatePersistence,
-    },
+    polling::{self, Scheduler, trigger::ScheduleTrigger},
+    source::{Feed, RssFeed},
+    update::{accept::AcceptUpdatePersistence, sqlite::SqliteUpdatePersistence},
 };
 
 mod args;
@@ -42,8 +34,8 @@ pub async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(args.verbosity)
         .init();
-    let data_path = args.config.parse()?;
-    let config = lib_common::config::parse_config::<Config>(
+    let data_path = args.config.parse_config()?;
+    let config = app_common::config::parse_config::<Config>(
         &data_path,
         include_bytes!("../asset/default_config.toml"),
     )
@@ -55,8 +47,8 @@ pub async fn main() -> anyhow::Result<()> {
             config.drop_model_in.clone(),
             ModelProducer::new(|| async { Gemma3VisionRunner::default().await }),
         );
-        let db = lib_common::config::setup_db(&data_path).await?;
-        let mut scheduler = Scheduler::new();
+        let db = app_common::config::setup_db(&data_path).await?;
+        let scheduler = Scheduler::new();
         let (run_mode, subscriptions) = parse_args_config(args, config)?;
 
         event!(Level::INFO, "run mode: {run_mode:?}");
@@ -71,11 +63,11 @@ pub async fn main() -> anyhow::Result<()> {
                     let decider = LlmConditionMatcher::new(
                         model.clone(),
                         &sub.condition,
-                        SqliteDecisionMemory::new(db.clone(), &data_path)?,
+                        SqliteDecisionMemory::new(db.clone(), &data_path, None)?,
                     );
                     let persistence = AcceptUpdatePersistence::new();
                     // TODO:oneshot should return immediately when there is no new update
-                    let updates = check_feed(sub, &feed, &decider, &scheduler, persistence);
+                    let updates = app_common::feed::check(sub, &feed, &decider, &scheduler, persistence);
                     pin_mut!(updates);
                     let mut stdout_guard = stdout().lock();
                     if let Some(result) = updates.next().await {
@@ -122,14 +114,20 @@ pub async fn main() -> anyhow::Result<()> {
                             let decider = LlmConditionMatcher::new(
                                 model.clone(),
                                 sub.condition.clone(),
-                                SqliteDecisionMemory::new(db.clone(), data_path.clone())?,
+                                SqliteDecisionMemory::new(db.clone(), data_path.clone(), None)?,
                             );
                             let persistence = SqliteUpdatePersistence::new(db.clone(), {
                                 let mut hasher = DefaultHasher::new();
                                 sub.hash(&mut hasher);
                                 format!("{:x}", hasher.finish())
                             })?;
-                            let updates = check_feed(sub, &feed, &decider, &scheduler, persistence);
+                            let updates = app_common::feed::check(
+                                sub,
+                                &feed,
+                                &decider,
+                                &scheduler,
+                                persistence,
+                            );
                             pin_mut!(updates);
                             while let Some(result) = updates.next().await {
                                 match result {
@@ -194,50 +192,6 @@ fn create_feed(sub: &Subscription) -> anyhow::Result<RssFeed> {
                 .transpose()?,
         )?,
     })
-}
-
-fn check_feed<'f, Item, FeedError, Feed_, DeciderError, Decider_, PersistenceError, Persistence>(
-    key: &'f Subscription,
-    feed: &'f Feed_,
-    decider: &'f Decider_,
-    scheduler: &Scheduler<Subscription>,
-    persistence: Persistence,
-) -> impl Stream<Item = anyhow::Result<(Task<Subscription>, bool)>>
-where
-    Item: LlmComprehendable + Hash + Serialize + DeserializeOwned + Send + Sync + Unpin + 'static,
-    FeedError: Display,
-    Feed_: Feed<Item = Item, Error = FeedError>,
-    DeciderError: std::error::Error + Send + Sync + 'static,
-    Decider_: Decider<Material = Item, Error = DeciderError> + ?Sized,
-    PersistenceError: Display,
-    Persistence: UpdatePersistence<Item = Item, Error = PersistenceError>,
-{
-    scheduler
-        .start_polling(Some(key))
-        .wake_update(feed, persistence)
-        .map_ok(move |(update, task)| {
-            event!(
-                Level::DEBUG,
-                "woke for update, schedule id = {}, key = {}",
-                task.schedule().id(),
-                task.schedule().key()
-            );
-            (update, task)
-        })
-        .map_err(|err| anyhow!("update error: {err}"))
-        .then(
-            async move |result| -> anyhow::Result<(Task<Subscription>, bool)> {
-                match result {
-                    Ok((update, task)) => {
-                        let Some(material) = update else {
-                            return Ok((task, false));
-                        };
-                        Ok((task, decider.get_truth_value(material).await?))
-                    }
-                    Err(err) => Err(err),
-                }
-            },
-        )
 }
 
 fn parse_args_config(

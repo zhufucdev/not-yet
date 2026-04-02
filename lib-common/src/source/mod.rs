@@ -1,6 +1,5 @@
 use std::{cmp::max, sync::Arc};
 
-use async_trait::async_trait;
 use escaping::Escape;
 use image::DynamicImage;
 use serde::Serialize;

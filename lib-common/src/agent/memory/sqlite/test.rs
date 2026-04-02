@@ -10,7 +10,9 @@ use crate::{
     agent::memory::{
         Decision, DecisionMemory,
         sqlite::{SqliteDecisionMemory, error::CreateDecisionMemoryError},
-    }, llm::SharedImageOrText, source::LlmComprehendable
+    },
+    llm::SharedImageOrText,
+    source::LlmComprehendable,
 };
 
 use super::{decision, material};
@@ -86,7 +88,7 @@ fn mock_decision(title: &str, is_truthy: bool) -> Decision<MockRssItem> {
 async fn new_valid_path_succeeds() {
     let dir = std::env::temp_dir();
     let result: Result<SqliteDecisionMemory<MockRssItem>, _> =
-        SqliteDecisionMemory::new(in_memory_db().await, &dir);
+        SqliteDecisionMemory::new(in_memory_db().await, &dir, None);
     result.expect("new() should succeed for a valid path");
 }
 
@@ -95,7 +97,7 @@ async fn new_valid_path_succeeds() {
 async fn new_unsupported_kind_returns_error() {
     let dir = std::env::temp_dir();
     let result: Result<SqliteDecisionMemory<NoKindItem>, _> =
-        SqliteDecisionMemory::new(in_memory_db().await, &dir);
+        SqliteDecisionMemory::new(in_memory_db().await, &dir, None);
     assert!(
         matches!(
             result,

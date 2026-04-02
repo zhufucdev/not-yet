@@ -7,5 +7,5 @@ pub struct Config {
     pub bot_token: Option<String>,
 
     /// Whitelisted user ids, who skip token authentication
-    pub whitelist: Vec<UserId>,
+    pub whitelist: Option<Vec<UserId>>,
 }

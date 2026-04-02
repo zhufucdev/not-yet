@@ -7,7 +7,8 @@ use std::{
 use async_stream::try_stream;
 use futures::Stream;
 use sea_orm::{
-    ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Related,
+    ColumnTrait, Database, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QueryOrder,
+    Related,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -28,6 +29,7 @@ mod test;
 
 pub struct SqliteDecisionMemory<U> {
     db: DatabaseConnection,
+    agent_id: Option<i32>,
     material_dir: PathBuf,
     _marker: PhantomData<U>,
 }
@@ -36,6 +38,7 @@ impl<U: LlmComprehendable> SqliteDecisionMemory<U> {
     pub fn new(
         db: DatabaseConnection,
         working_dir: impl AsRef<Path>,
+        agent_id: Option<i32>,
     ) -> Result<Self, CreateDecisionMemoryError> {
         if U::KIND.is_none() {
             return Err(CreateDecisionMemoryError::UnsupportedMaterialType);
@@ -45,6 +48,7 @@ impl<U: LlmComprehendable> SqliteDecisionMemory<U> {
 
         Ok(Self {
             db,
+            agent_id,
             _marker: PhantomData,
             material_dir,
         })
@@ -71,6 +75,7 @@ where
             }(),
             async || -> Result<(), Self::Error> {
                 decision::ActiveModel::builder()
+                    .set_agent_id(self.agent_id)
                     .set_time(decision.time)
                     .set_is_truthy(decision.is_truthy)
                     .set_material(
@@ -90,11 +95,15 @@ where
     fn iter_newest_first<'s>(
         &'s self,
     ) -> impl Stream<Item = Result<impl AsRef<Decision<Self::Material>>, Self::Error>> {
+        let mut query = decision::Entity::find().find_also_related(material::Entity);
+        if let Some(agent_id) = self.agent_id {
+            query = query.filter(decision::Column::AgentId.eq(agent_id));
+        }
+        query = query
+            .filter(material::Column::Kind.eq(Self::Material::KIND.unwrap()))
+            .order_by_desc(decision::Column::Time);
         try_stream! {
-            for (decision, material) in decision::Entity::find()
-                .find_also_related(material::Entity)
-                .filter(material::Column::Kind.eq(Self::Material::KIND.unwrap()))
-                .order_by_desc(decision::Column::Time)
+            for (decision, material) in query
                 .all(&self.db)
                 .await? {
                 let fp = self.material_dir.join(&material.unwrap().shasum);

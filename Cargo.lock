@@ -139,6 +139,69 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "app-bot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "app-common",
+ "clap",
+ "clap-verbosity-flag",
+ "futures",
+ "itertools 0.14.0",
+ "lib-common",
+ "llama-runner",
+ "migration",
+ "priority-authenticator",
+ "reqwest 0.13.2",
+ "sea-orm",
+ "serde",
+ "smol_str",
+ "teloxide",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "app-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "app-common",
+ "clap",
+ "clap-verbosity-flag",
+ "futures",
+ "humantime-serde",
+ "lib-common",
+ "llama-runner",
+ "migration",
+ "reqwest 0.13.2",
+ "sea-orm",
+ "serde",
+ "serde_with",
+ "smol_str",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "app-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "futures",
+ "lib-common",
+ "migration",
+ "sea-orm",
+ "serde",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "aquamarine"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2572,50 +2635,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lib-bot"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "clap-verbosity-flag",
- "futures",
- "itertools 0.14.0",
- "lib-common",
- "migration",
- "priority-authenticator",
- "reqwest 0.13.2",
- "sea-orm",
- "serde",
- "smol_str",
- "teloxide",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "lib-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "clap-verbosity-flag",
- "futures",
- "humantime-serde",
- "lib-common",
- "llama-runner",
- "migration",
- "reqwest 0.13.2",
- "sea-orm",
- "serde",
- "serde_with",
- "smol_str",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "lib-common"
 version = "0.1.0"
 dependencies = [
@@ -3010,8 +3029,8 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 name = "not_yet"
 version = "0.1.0"
 dependencies = [
- "lib-bot",
- "lib-cli",
+ "app-bot",
+ "app-cli",
  "lib-common",
  "tokio",
  "tracing",

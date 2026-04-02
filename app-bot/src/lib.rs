@@ -1,7 +1,8 @@
-mod db;
-mod token;
-mod config;
 mod authenticator;
+mod config;
+mod db;
+mod rss;
+mod token;
 
 #[cfg(feature = "telegram")]
 pub mod telegram;

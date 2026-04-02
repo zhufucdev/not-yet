@@ -7,7 +7,11 @@ use std::{
 use async_stream::stream;
 use chrono::{DateTime, Utc};
 use futures::Stream;
-use tokio::sync::{RwLock, broadcast};
+use rmp_serde::to_vec;
+use tokio::sync::{
+    RwLock,
+    broadcast::{self, error::RecvError},
+};
 use tracing::{Instrument, Level, Span, debug_span, event, info_span};
 
 use crate::polling::{
@@ -184,6 +188,15 @@ impl<K: KeyContract> Scheduler<K> {
                 };
             }
         }
+    }
+
+    pub async fn schedules(&self) -> Vec<Arc<Schedule<K>>> {
+        self.schedules.read().await.to_vec()
+    }
+
+    pub async fn until_next_reschedule(&self) -> Result<(), RecvError> {
+        self.schedules_notify.0.subscribe().recv().await?;
+        Ok(())
     }
 }
 

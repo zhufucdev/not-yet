@@ -7,6 +7,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
+    pub agent_id: Option<i32>,
     pub is_truthy: bool,
     pub time: DateTime<Utc>,
     pub material_id: i32,

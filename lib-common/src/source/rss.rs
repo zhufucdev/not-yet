@@ -88,6 +88,10 @@ impl RssFeed {
         .instrument(span)
         .await
     }
+
+    pub fn url(&self) -> &str {
+        self.url.as_str()
+    }
 }
 
 impl Feed for RssFeed {
