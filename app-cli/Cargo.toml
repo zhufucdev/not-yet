@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-migration = { path = "../migration" }
+migration = { path = "../migration", features = ["bot"]}
 lib-common = { path = "../lib-common" }
 app-common = { path = "../app-common" }
 clap = { version = "4.6.0", features = ["derive"] }
