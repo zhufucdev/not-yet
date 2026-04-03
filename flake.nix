@@ -43,14 +43,19 @@
 
       # A Nixpkgs overlay.
       overlay = final: prev: {
-        default = final.callPackage (import ./nix/package.nix) { features = [ "cuda" ]; };
-        telegram = final.callPackage (import ./nix/package.nix) { features = [ "cuda" "telegram" ]; };
+        not-yet = final.callPackage (import ./nix/package.nix) { features = [ "cuda" ]; } // {
+          telegram = final.callPackage (import ./nix/package.nix) {
+            features = [
+              "cuda"
+              "telegram"
+            ];
+          };
+        };
       };
 
       # Provide some binary packages for selected system types.
       packages = forAllSystems (system: {
         inherit (nixpkgsFor.${system}) default;
-        inherit (nixpkgsFor.${system}) telegram;
       });
 
       # A NixOS module, if applicable (e.g. if the package provides a system service).
@@ -60,6 +65,16 @@
           nixpkgs.overlays = [ self.overlay ];
 
           environment.systemPackages = [ pkgs.not-yet ];
+
+          #systemd.services = { ... };
+        };
+
+      nixosModules.telegram =
+        { pkgs, ... }:
+        {
+          nixpkgs.overlays = [ self.overlay ];
+
+          environment.systemPackages = [ pkgs.not-yet.telegram ];
 
           #systemd.services = { ... };
         };
