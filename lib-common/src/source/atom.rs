@@ -41,7 +41,9 @@ impl AtomFeed {
             reqwest::header::ACCEPT,
             "application/atom+xml".parse().unwrap(),
         );
-        let client = reqwest::Client::builder().default_headers(headers).build()?;
+        let client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()?;
         let url = url.into();
         Ok(Self {
             url: url.clone(),
@@ -130,7 +132,7 @@ impl AtomFeedItem {
     ) -> Result<Self, Error> {
         let json = serde_json::to_string(&entry)?;
         let extra = if let Some(content_xml) = entry.content().and_then(|content| content.value())
-            && let Ok(urls) = utils::extract_url_from_feed_item::<anyhow::Error>(content_xml)
+            && let Ok(urls) = utils::extract_url_from_feed_item::<anyhow::Error>(content_xml, Some(1))
         {
             future::join_all(
                 urls.into_iter()
@@ -174,5 +176,7 @@ mod test {
         let feed = AtomFeed::new("https://www.reddit.com/r/rust.rss", Some(&headers)).unwrap();
         let items = feed.get_items().await.unwrap();
         assert!(!items.is_empty());
+        println!("{}", serde_json::to_string(items.last().unwrap()).unwrap());
+        panic!();
     }
 }

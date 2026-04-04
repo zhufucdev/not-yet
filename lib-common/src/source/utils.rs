@@ -54,7 +54,10 @@ where
     return Ok(None);
 }
 
-pub(crate) fn extract_url_from_feed_item<E>(xml: impl AsRef<str>) -> Result<Vec<String>, E>
+pub(crate) fn extract_url_from_feed_item<E>(
+    xml: impl AsRef<str>,
+    max_depth: Option<i32>,
+) -> Result<Vec<String>, E>
 where
     E: From<quick_xml::Error>,
 {
@@ -66,7 +69,7 @@ where
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 depth += 1;
-                if depth > 1 {
+                if max_depth.is_some_and(|it| depth > it) {
                     continue;
                 }
                 match e.name().as_ref() {
@@ -136,5 +139,25 @@ impl Hash for UrlContent {
             UrlContent::Text { url: _, text: _ } => state.write_u8(1),
         }
         self.url().hash(state);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_extract_url_from_feed_item() {
+        let item = r#"&#32; submitted by &#32; <a href="https://www.reddit.com/user/orhunp"> /u/orhunp </a> <br/> <span><a href="https://blog.orhun.dev/800-rust-projects/">[link]</a></span> &#32; <span><a href="https://www.reddit.com/r/rust/comments/1sb859y/800_rust_terminal_projects_in_3_years/">[comments]</a></span>"#;
+        let urls = extract_url_from_feed_item::<anyhow::Error>(item, None).unwrap();
+        assert_eq!(urls[0], "https://www.reddit.com/user/orhunp");
+        assert_eq!(urls[1], "https://blog.orhun.dev/800-rust-projects/");
+        assert_eq!(
+            urls[2],
+            "https://www.reddit.com/r/rust/comments/1sb859y/800_rust_terminal_projects_in_3_years/"
+        );
     }
 }

@@ -131,7 +131,7 @@ impl LlmRssItem {
 
         async move {
             let extra = if let Some(content) = item.content()
-                && let Ok(urls) = utils::extract_url_from_feed_item::<anyhow::Error>(content)
+                && let Ok(urls) = utils::extract_url_from_feed_item::<anyhow::Error>(content, Some(1))
             {
                 future::join_all(
                     urls.into_iter().map(async |url| {
