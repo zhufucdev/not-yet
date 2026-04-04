@@ -19,6 +19,8 @@ pub struct Model {
 pub enum Kind {
     #[sea_orm(num_value = 0)]
     RssItem,
+    #[sea_orm(num_value = 1)]
+    AtomItem,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

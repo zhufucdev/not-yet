@@ -1,3 +1,5 @@
+use lib_common::source::{RssFeed, atom::AtomFeed};
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use std::{collections::BTreeMap, fmt::Display, time::Duration};
@@ -41,10 +43,21 @@ pub struct Subscription {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum Feed {
     #[serde(rename = "rss")]
-    Rss {
-        url: SmolStr,
-        headers: Option<BTreeMap<SmolStr, SmolStr>>,
-    },
+    Rss(RssConfig),
+    #[serde(rename = "atom")]
+    Atom(AtomConfig),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct RssConfig {
+    pub url: SmolStr,
+    pub headers: Option<BTreeMap<SmolStr, SmolStr>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct AtomConfig {
+    pub url: SmolStr,
+    pub headers: Option<BTreeMap<SmolStr, SmolStr>>,
 }
 
 impl AsRef<Subscription> for &Subscription {
@@ -56,5 +69,47 @@ impl AsRef<Subscription> for &Subscription {
 impl Display for Subscription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+pub trait ToFeed<F> {
+    fn to_feed(&self) -> Result<F, anyhow::Error>;
+}
+
+impl ToFeed<RssFeed> for RssConfig {
+    fn to_feed(&self) -> anyhow::Result<RssFeed> {
+        Ok(RssFeed::new(
+            self.url.clone(),
+            self.headers
+                .as_ref()
+                .map(|map| -> anyhow::Result<_> {
+                    Ok(HeaderMap::from_iter(
+                        map.iter()
+                            .map(|(k, v)| Ok((k.parse()?, v.parse()?)))
+                            .collect::<Result<Vec<_>, anyhow::Error>>()?,
+                    ))
+                })
+                .transpose()?
+                .as_ref(),
+        )?)
+    }
+}
+
+impl ToFeed<AtomFeed> for AtomConfig {
+    fn to_feed(&self) -> Result<AtomFeed, anyhow::Error> {
+        Ok(AtomFeed::new(
+            self.url.clone(),
+            self.headers
+                .as_ref()
+                .map(|map| -> anyhow::Result<_> {
+                    Ok(HeaderMap::from_iter(
+                        map.iter()
+                            .map(|(k, v)| Ok((k.parse()?, v.parse()?)))
+                            .collect::<Result<Vec<_>, anyhow::Error>>()?,
+                    ))
+                })
+                .transpose()?
+                .as_ref(),
+        )?)
     }
 }

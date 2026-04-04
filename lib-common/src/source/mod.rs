@@ -1,14 +1,14 @@
 use std::{cmp::max, sync::Arc};
 
 use escaping::Escape;
-use image::DynamicImage;
 use serde::Serialize;
 use smol_str::{SmolStr, ToSmolStr};
 
+pub mod atom;
 pub mod rss;
+pub mod utils;
 
 pub use rss::{LlmRssItem, RssFeed};
-use tracing::{Level, event};
 
 use crate::{agent::memory::sqlite::material, llm::SharedImageOrText, update::Updatable};
 
@@ -28,7 +28,6 @@ pub struct DefaultUpdate {
 pub struct DefaultMetadata {
     pub name: String,
     pub type_: Option<SmolStr>,
-    msg: String,
 }
 
 #[trait_variant::make(Send)]
@@ -138,45 +137,17 @@ impl LlmComprehendable for DefaultUpdate {
 
 impl DefaultMetadata {
     pub fn new(name: String, type_: Option<SmolStr>) -> Self {
-        let msg = if let Some(typ) = type_.clone() {
-            format!("{} named \"{}\"", typ, name)
-        } else {
-            name.clone()
-        };
-        Self { name, type_, msg }
+        Self { name, type_ }
     }
 }
 
 impl LlmComprehendable for DefaultMetadata {
     fn get_message(&self) -> Vec<SharedImageOrText> {
-        vec![self.msg.to_smolstr().into()]
-    }
-}
-
-async fn get_url_as_llm_context<E>(
-    url: &str,
-    client: &reqwest::Client,
-) -> Result<(Option<DynamicImage>, Option<String>), E>
-where
-    E: From<reqwest::Error> + From<image::ImageError>,
-{
-    let mut extra_image = None;
-    let mut extra_text = None;
-
-    let response = client.get(url).send().await?;
-    if response.status().is_success()
-        && let Some(content_type) = response.headers().get("content-type")
-        && let Ok(content_type) = content_type.to_str()
-    {
-        event!(Level::INFO, "Got extra content, attaching to struct");
-        event!(Level::DEBUG, "Content type {}", content_type);
-        if content_type.starts_with("text/") {
-            extra_text = Some(response.text().await?);
-        } else if content_type.starts_with("image/") {
-            extra_image = Some(image::load_from_memory(response.bytes().await?.as_ref())?);
+        let msg = if let Some(typ) = self.type_.clone() {
+            format!("{} named \"{}\"", typ, self.name)
         } else {
-            event!(Level::WARN, "Unsupported content type, ignoring");
-        }
+            self.name.clone()
+        };
+        vec![msg.into()]
     }
-    Ok((extra_image, extra_text))
 }

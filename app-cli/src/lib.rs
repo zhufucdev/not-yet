@@ -1,28 +1,34 @@
 use std::{
     collections::BTreeMap,
+    fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     io::{Write, stdout},
+    path::{Path, PathBuf},
     time::Duration,
 };
 
 use anyhow::{Context, anyhow};
-use app_common::config::ParseConfigPath;
+use app_common::{config::ParseConfigPath, feed};
 use clap::Parser;
 use futures::{StreamExt, future, pin_mut};
-use llama_runner::Gemma3VisionRunner;
+use llama_runner::{
+    Gemma3VisionRunner, RunnerWithRecommendedSampling, error::CreateLlamaCppRunnerError,
+};
 use reqwest::header::HeaderMap;
+use sea_orm::DatabaseConnection;
+use serde::{Serialize, de::DeserializeOwned};
 use smol_str::ToSmolStr;
 use tracing::{Instrument, Level, debug_span, event, info_span};
 
 use crate::{
     args::Args,
-    config::{Config, RunMode, Subscription},
+    config::{Config, RssConfig, RunMode, Subscription, ToFeed},
 };
 use lib_common::{
     agent::{LlmConditionMatcher, memory::sqlite::SqliteDecisionMemory},
     llm::timeout::{ModelProducer, TimedModel},
     polling::{self, Scheduler, trigger::ScheduleTrigger},
-    source::{Feed, RssFeed},
+    source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed},
     update::{accept::AcceptUpdatePersistence, sqlite::SqliteUpdatePersistence},
 };
 
@@ -56,31 +62,12 @@ pub async fn main() -> anyhow::Result<()> {
             config::RunMode::Oneshot => {
                 for sub in subscriptions.as_ref() {
                     event!(Level::INFO, "checking subscription {sub:?}");
-                    let feed = create_feed(sub)?;
-                    let _sc = scheduler
-                        .add_schedule(ScheduleTrigger::Interval(Duration::ZERO), sub.clone())
-                        .await?;
-                    let decider = LlmConditionMatcher::new(
-                        model.clone(),
-                        &sub.condition,
-                        SqliteDecisionMemory::new(db.clone(), &data_path, None)?,
-                    );
-                    let persistence = AcceptUpdatePersistence::new();
-                    // TODO:oneshot should return immediately when there is no new update
-                    let updates = app_common::feed::check(sub, &feed, &decider, &scheduler, persistence);
-                    pin_mut!(updates);
-                    let mut stdout_guard = stdout().lock();
-                    if let Some(result) = updates.next().await {
-                        let (task, is_truthy) = result?;
-                        event!(
-                            Level::INFO,
-                            "schedule id = {}, is_truthy = {is_truthy}",
-                            task.schedule().id()
-                        );
-                        if is_truthy {
-                            writeln!(&mut stdout_guard, "vivid")?;
-                        } else {
-                            writeln!(&mut stdout_guard, "statsis")?;
+                    match &sub.feed {
+                        config::Feed::Rss(conf) => {
+                            oneshot(&scheduler, sub, conf.to_feed()?, &model, &db, &data_path).await?
+                        }
+                        config::Feed::Atom(conf) => {
+                            oneshot(&scheduler, sub, conf.to_feed()?, &model, &db, &data_path).await?
                         }
                     }
                 }
@@ -110,54 +97,30 @@ pub async fn main() -> anyhow::Result<()> {
                         async {
                             event!(Level::INFO, "registered subscription {sub:?}");
 
-                            let feed = create_feed(sub)?;
-                            let decider = LlmConditionMatcher::new(
-                                model.clone(),
-                                sub.condition.clone(),
-                                SqliteDecisionMemory::new(db.clone(), data_path.clone(), None)?,
-                            );
-                            let persistence = SqliteUpdatePersistence::new(db.clone(), {
-                                let mut hasher = DefaultHasher::new();
-                                sub.hash(&mut hasher);
-                                format!("{:x}", hasher.finish())
-                            })?;
-                            let updates = app_common::feed::check(
-                                sub,
-                                &feed,
-                                &decider,
-                                &scheduler,
-                                persistence,
-                            );
-                            pin_mut!(updates);
-                            while let Some(result) = updates.next().await {
-                                match result {
-                                    Ok((task, is_truthy)) => {
-                                        let mut stdout_guard = stdout().lock();
-                                        if is_truthy {
-                                            write!(&mut stdout_guard, "{sub_id}")?;
-                                            if let Ok(metadata) = feed.get_metadata().await {
-                                                write!(&mut stdout_guard, "\t{}", metadata.name)?;
-                                            }
-                                            writeln!(&mut stdout_guard)?;
-                                        } else {
-                                            event!(
-                                                Level::INFO,
-                                                "the LLM decided that an update for {} is stasis",
-                                                task.schedule().key()
-                                            );
-                                        }
-                                    }
-                                    Err(err) => {
-                                        if let Ok(metadata) = feed.get_metadata().await {
-                                            event!(
-                                                Level::ERROR,
-                                                "failed to poll update, checking feed {:?}: {err}",
-                                                metadata.name
-                                            );
-                                        } else {
-                                            event!(Level::ERROR, "failed to poll update: {err}");
-                                        }
-                                    }
+                            match &sub.feed {
+                                config::Feed::Rss(conf) => {
+                                    daemon(
+                                        &scheduler,
+                                        sub,
+                                        sub_id,
+                                        conf.to_feed()?,
+                                        &model,
+                                        &db,
+                                        &data_path,
+                                    )
+                                    .await?;
+                                }
+                                config::Feed::Atom(conf) => {
+                                    daemon(
+                                        &scheduler,
+                                        sub,
+                                        sub_id,
+                                        conf.to_feed()?,
+                                        &model,
+                                        &db,
+                                        &data_path,
+                                    )
+                                    .await?
                                 }
                             }
                             Ok(())
@@ -175,23 +138,109 @@ pub async fn main() -> anyhow::Result<()> {
     .await
 }
 
-fn create_feed(sub: &Subscription) -> anyhow::Result<RssFeed> {
-    Ok(match &sub.feed {
-        config::Feed::Rss { url, headers } => RssFeed::new(
-            url,
-            &headers
-                .as_ref()
-                .map(|map| -> anyhow::Result<_> {
-                    Ok(HeaderMap::from_iter(
-                        map.iter()
-                            .map(|(k, v)| Ok((k.parse()?, v.parse()?)))
-                            .collect::<anyhow::Result<Vec<_>>>()
-                            .context("invalid header")?,
-                    ))
-                })
-                .transpose()?,
-        )?,
-    })
+async fn oneshot<Feed_>(
+    scheduler: &Scheduler<Subscription>,
+    sub: &Subscription,
+    feed: Feed_,
+    model: &TimedModel<RunnerWithRecommendedSampling<Gemma3VisionRunner>, CreateLlamaCppRunnerError>,
+    db: &DatabaseConnection,
+    data_path: &PathBuf,
+) -> anyhow::Result<()>
+where
+    Feed_: Feed + Send + Sync + 'static,
+    Feed_::Item: LlmComprehendable + Hash + Serialize + DeserializeOwned,
+    Feed_::Error: Display,
+{
+    let _sc = scheduler
+        .add_schedule(ScheduleTrigger::Interval(Duration::ZERO), sub.clone())
+        .await?;
+    let decider = LlmConditionMatcher::new(
+        model.clone(),
+        &sub.condition,
+        SqliteDecisionMemory::new(db.clone(), &data_path, None)?,
+    );
+    let persistence = AcceptUpdatePersistence::new();
+    // TODO:oneshot should return immediately when there is no new update
+    let updates = app_common::feed::check(sub, &feed, &decider, &scheduler, persistence);
+    pin_mut!(updates);
+    let mut stdout_guard = stdout().lock();
+    if let Some(result) = updates.next().await {
+        let (task, is_truthy) = result?;
+        event!(
+            Level::INFO,
+            "schedule id = {}, is_truthy = {is_truthy}",
+            task.schedule().id()
+        );
+        if is_truthy {
+            writeln!(&mut stdout_guard, "vivid")?;
+        } else {
+            writeln!(&mut stdout_guard, "statsis")?;
+        }
+    }
+    Ok(())
+}
+
+async fn daemon<Feed_>(
+    scheduler: &Scheduler<Subscription>,
+    sub: &Subscription,
+    sub_id: usize,
+    feed: Feed_,
+    model: &TimedModel<
+        RunnerWithRecommendedSampling<Gemma3VisionRunner>,
+        CreateLlamaCppRunnerError,
+    >,
+    db: &DatabaseConnection,
+    data_path: &PathBuf,
+) -> anyhow::Result<()>
+where
+    Feed_: Feed<Metadata = DefaultMetadata> + Send + Sync + 'static,
+    Feed_::Item: LlmComprehendable + Hash + Serialize + DeserializeOwned,
+    Feed_::Error: Display,
+{
+    let decider = LlmConditionMatcher::new(
+        model.clone(),
+        sub.condition.clone(),
+        SqliteDecisionMemory::new(db.clone(), data_path.clone(), None)?,
+    );
+    let persistence = SqliteUpdatePersistence::new(db.clone(), {
+        let mut hasher = DefaultHasher::new();
+        sub.hash(&mut hasher);
+        format!("{:x}", hasher.finish())
+    })?;
+    let updates = app_common::feed::check(sub, &feed, &decider, &scheduler, persistence);
+    pin_mut!(updates);
+    while let Some(result) = updates.next().await {
+        match result {
+            Ok((task, is_truthy)) => {
+                let mut stdout_guard = stdout().lock();
+                if is_truthy {
+                    write!(&mut stdout_guard, "{sub_id}")?;
+                    if let Ok(metadata) = feed.get_metadata().await {
+                        write!(&mut stdout_guard, "\t{}", metadata.name)?;
+                    }
+                    writeln!(&mut stdout_guard)?;
+                } else {
+                    event!(
+                        Level::INFO,
+                        "the LLM decided that an update for {} is stasis",
+                        task.schedule().key()
+                    );
+                }
+            }
+            Err(err) => {
+                if let Ok(metadata) = feed.get_metadata().await {
+                    event!(
+                        Level::ERROR,
+                        "failed to poll update, checking feed {:?}: {err}",
+                        metadata.name
+                    );
+                } else {
+                    event!(Level::ERROR, "failed to poll update: {err}");
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_args_config(
@@ -225,10 +274,10 @@ fn parse_args_config(
                     url.into_iter()
                         .zip(conditions.into_iter())
                         .map(|(url, condition)| Subscription {
-                            feed: config::Feed::Rss {
+                            feed: config::Feed::Rss(RssConfig {
                                 url: url.into(),
                                 headers: headers.clone(),
-                            },
+                            }),
                             condition: condition.to_smolstr(),
                         })
                         .collect(),

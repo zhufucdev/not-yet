@@ -1,4 +1,4 @@
-use lib_common::source::RssFeed;
+use lib_common::source::atom::AtomFeed;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use sea_orm::prelude::*;
 
@@ -8,7 +8,7 @@ use super::subscription;
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "rss")]
+#[sea_orm(table_name = "atom")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
@@ -24,10 +24,10 @@ pub struct Model {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-impl TryInto<RssFeed> for Model {
+impl TryInto<AtomFeed> for Model {
     type Error = ParseHeaderError;
 
-    fn try_into(self) -> Result<RssFeed, Self::Error> {
+    fn try_into(self) -> Result<AtomFeed, Self::Error> {
         let mut extra_headers = HeaderMap::new();
         if self.browser_ua {
             extra_headers.insert(
@@ -38,6 +38,6 @@ impl TryInto<RssFeed> for Model {
         if let Some(headers) = self.headers.map(header::parse_headers).transpose()? {
             extra_headers.extend(headers);
         }
-        Ok(RssFeed::new(self.url, Some(&extra_headers))?)
+        Ok(AtomFeed::new(self.url, Some(&extra_headers))?)
     }
 }

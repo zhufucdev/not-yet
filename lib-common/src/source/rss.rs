@@ -1,11 +1,8 @@
-use async_trait::async_trait;
-use image::DynamicImage;
-use llama_runner::ImageOrText;
+use futures::{FutureExt, future};
 use rss::Channel;
 use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
 use smol_str::{SmolStr, ToSmolStr};
-use std::{str::FromStr, sync::Arc};
+use std::str::FromStr;
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{Instrument, Level, event, info_span};
@@ -15,8 +12,10 @@ use reqwest::header::{HeaderMap, HeaderName};
 use crate::{
     agent::memory::sqlite::material,
     llm::SharedImageOrText,
-    serde_utils::DynImageConverter,
-    source::{DefaultMetadata, Feed, LlmComprehendable, get_url_as_llm_context},
+    source::{
+        DefaultMetadata, Feed, LlmComprehendable,
+        utils::{self, UrlContent},
+    },
     update::Updatable,
 };
 
@@ -26,13 +25,10 @@ pub struct RssFeed {
     cache: RwLock<Option<Channel>>,
 }
 
-#[serde_as]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LlmRssItem {
     pub(crate) json: String,
-    #[serde_as(as = "Option<Arc<DynImageConverter>>")]
-    extra_image: Option<Arc<DynamicImage>>,
-    extra_text: Option<String>,
+    extra: Vec<UrlContent>,
 }
 
 impl std::hash::Hash for LlmRssItem {
@@ -44,9 +40,9 @@ impl std::hash::Hash for LlmRssItem {
 impl RssFeed {
     pub fn new(
         url: impl ToString,
-        extra_headers: &Option<HeaderMap>,
+        extra_headers: Option<&HeaderMap>,
     ) -> Result<Self, reqwest::Error> {
-        let mut headers = extra_headers.clone().unwrap_or_else(|| HeaderMap::new());
+        let mut headers = extra_headers.cloned().unwrap_or_else(|| HeaderMap::new());
         headers.append(
             reqwest::header::ACCEPT,
             "application/rss+xml".parse().unwrap(),
@@ -134,24 +130,23 @@ impl LlmRssItem {
         let json = serde_json::to_string(&item)?;
 
         async move {
-            let (extra_image, extra_text) = if let Some(content) = item.content() {
-                if content.starts_with("http://") || content.starts_with("https://") {
-                    event!(Level::DEBUG, "Getting content from url {}", content);
-                    get_url_as_llm_context::<Error>(content, client)
-                        .await
-                        .map(|(image, text)| (image.map(Arc::new), text))?
-                } else {
-                    (None, Some(content.to_string()))
-                }
+            let extra = if let Some(content) = item.content()
+                && let Ok(urls) = utils::extract_url_from_feed_item::<anyhow::Error>(content)
+            {
+                future::join_all(
+                    urls.into_iter().map(async |url| {
+                        utils::get_url_content::<anyhow::Error>(url, client).await
+                    }),
+                )
+                .await
+                .into_iter()
+                .filter_map(|r| r.ok().flatten())
+                .collect()
             } else {
-                (None, None)
+                Vec::new()
             };
 
-            Ok(LlmRssItem {
-                json,
-                extra_image,
-                extra_text,
-            })
+            Ok(LlmRssItem { json, extra })
         }
         .instrument(span)
         .await
@@ -164,15 +159,19 @@ impl LlmComprehendable for LlmRssItem {
     fn get_message(&self) -> Vec<SharedImageOrText> {
         let mut chunks = Vec::new();
         chunks.push(self.json.to_smolstr().into());
-        if self.extra_text.is_some() || self.extra_image.is_some() {
-            chunks.push("Fetched content:\n".into());
-        }
-        if let Some(text) = self.extra_text.as_ref() {
-            chunks.push(text.into());
-        }
-        if let Some(image) = self.extra_image.as_ref() {
-            chunks.push(image.clone().into());
-        }
+        chunks.extend(
+            self.extra
+                .iter()
+                .map(|content| {
+                    vec![
+                        SharedImageOrText::Text(
+                            format!("Fetched content for \"{}\"", content.url()).into(),
+                        ),
+                        content.into(),
+                    ]
+                })
+                .flatten(),
+        );
         chunks
     }
 }
@@ -202,21 +201,9 @@ mod test {
     async fn test_rss_feed_fetch_megaphone() {
         let feed = RssFeed::new(
             "https://feeds.megaphone.fm/GLT1412515089".to_string(),
-            &None,
+            None,
         )
         .unwrap();
-        let items = feed.get_items().await.unwrap();
-        assert!(!items.is_empty());
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_rss_feed_fetch_reddit() {
-        let headers = HeaderMap::from_iter(vec![(
-            "user-agent".parse().unwrap(),
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15".parse().unwrap(),
-        )]);
-        let feed = RssFeed::new("https://www.reddit.com/r/rust.rss", &Some(headers)).unwrap();
         let items = feed.get_items().await.unwrap();
         assert!(!items.is_empty());
     }
