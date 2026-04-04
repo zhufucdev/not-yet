@@ -41,11 +41,11 @@ impl AtomFeed {
             reqwest::header::ACCEPT,
             "application/atom+xml".parse().unwrap(),
         );
-        let client = reqwest::Client::builder();
+        let client = reqwest::Client::builder().default_headers(headers).build()?;
         let url = url.into();
         Ok(Self {
             url: url.clone(),
-            client: client.build()?,
+            client,
             cache: RwLock::new(None),
             span: debug_span!("atom feed", url = ?url).clone(),
         })
@@ -79,11 +79,10 @@ impl Updatable for AtomFeed {
 
     async fn get_items(&self) -> Result<Vec<Self::Item>, Self::Error> {
         let feed = self.get_feed().await?;
-        future::join_all(
-            feed.entries()
-                .iter()
-                .map(|entry| AtomFeedItem::from_entry(entry, &self.client)),
-        )
+        future::join_all(feed.entries().iter().map(|entry| {
+            async { AtomFeedItem::from_entry(entry, &self.client).await }
+                .instrument(debug_span!("item_from_entry", entry = ?entry.id()))
+        }))
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
@@ -99,7 +98,7 @@ impl Feed for AtomFeed {
         } else {
             self.get_feed().await?.title().to_string()
         };
-        Ok(DefaultMetadata::new(title, Some("Atom feed".into())))
+        Ok(DefaultMetadata::new(title, Some("atom feed".into())))
     }
 }
 
@@ -169,7 +168,7 @@ mod test {
     #[traced_test]
     async fn test_rss_feed_fetch_reddit() {
         let headers = HeaderMap::from_iter(vec![(
-            "user-agent".parse().unwrap(),
+            reqwest::header::USER_AGENT,
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15".parse().unwrap(),
         )]);
         let feed = AtomFeed::new("https://www.reddit.com/r/rust.rss", Some(&headers)).unwrap();
