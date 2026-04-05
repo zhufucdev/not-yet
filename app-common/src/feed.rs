@@ -31,6 +31,7 @@ pub fn check<
     decider: &'f Decider_,
     scheduler: &Scheduler<Key>,
     persistence: Persistence,
+    buffer_size: usize,
 ) -> impl Stream<Item = anyhow::Result<(Option<String>, Task<Key>, bool)>>
 where
     Key: KeyContract + Display,
@@ -52,7 +53,7 @@ where
 {
     scheduler
         .start_polling(Some(key))
-        .wake_update(feed, persistence, usize::MAX)
+        .wake_update(feed, persistence, buffer_size)
         .map_ok(move |(update, task)| {
             event!(
                 Level::DEBUG,

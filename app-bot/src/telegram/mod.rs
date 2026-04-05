@@ -300,6 +300,7 @@ where
             &decider,
             &scheduler,
             SqliteUpdatePersistence::new(db.clone(), sub_id)?,
+            sub.buffer_size as usize,
         );
         pin_mut!(updates);
         while let Some((title, _, is_truthy)) = updates.try_next().await? {

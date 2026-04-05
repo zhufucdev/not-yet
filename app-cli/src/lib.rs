@@ -71,12 +71,28 @@ pub async fn main() -> anyhow::Result<()> {
                     event!(Level::INFO, "checking subscription {sub:?}");
                     match &sub.feed {
                         config::Feed::Rss(conf) => {
-                            oneshot(&scheduler, sub, conf.to_feed()?, &model, &db, &data_path)
-                                .await?
+                            oneshot(
+                                &scheduler,
+                                sub,
+                                conf.to_feed()?,
+                                &model,
+                                sub.buffer_size,
+                                &db,
+                                &data_path,
+                            )
+                            .await?
                         }
                         config::Feed::Atom(conf) => {
-                            oneshot(&scheduler, sub, conf.to_feed()?, &model, &db, &data_path)
-                                .await?
+                            oneshot(
+                                &scheduler,
+                                sub,
+                                conf.to_feed()?,
+                                &model,
+                                sub.buffer_size,
+                                &db,
+                                &data_path,
+                            )
+                            .await?
                         }
                     }
                 }
@@ -114,6 +130,7 @@ pub async fn main() -> anyhow::Result<()> {
                                         sub_id,
                                         conf.to_feed()?,
                                         &model,
+                                        sub.buffer_size,
                                         &db,
                                         &data_path,
                                     )
@@ -126,6 +143,7 @@ pub async fn main() -> anyhow::Result<()> {
                                         sub_id,
                                         conf.to_feed()?,
                                         &model,
+                                        sub.buffer_size,
                                         &db,
                                         &data_path,
                                     )
@@ -155,6 +173,7 @@ async fn oneshot<Feed_>(
         RunnerWithRecommendedSampling<Gemma3VisionRunner>,
         CreateLlamaCppRunnerError,
     >,
+    buffer_size: usize,
     db: &DatabaseConnection,
     data_path: &PathBuf,
 ) -> anyhow::Result<()>
@@ -173,7 +192,8 @@ where
     );
     let persistence = AcceptUpdatePersistence::new();
     // TODO:oneshot should return immediately when there is no new update
-    let updates = app_common::feed::check(sub, &feed, &decider, &scheduler, persistence);
+    let updates =
+        app_common::feed::check(sub, &feed, &decider, &scheduler, persistence, buffer_size);
     pin_mut!(updates);
     let mut stdout_guard = stdout().lock();
     if let Some(result) = updates.next().await {
@@ -201,6 +221,7 @@ async fn daemon<Feed_>(
         RunnerWithRecommendedSampling<Gemma3VisionRunner>,
         CreateLlamaCppRunnerError,
     >,
+    buffer_size: usize,
     db: &DatabaseConnection,
     data_path: &PathBuf,
 ) -> anyhow::Result<()>
@@ -219,7 +240,8 @@ where
         sub.hash(&mut hasher);
         format!("{:x}", hasher.finish())
     })?;
-    let updates = app_common::feed::check(sub, &feed, &decider, &scheduler, persistence);
+    let updates =
+        app_common::feed::check(sub, &feed, &decider, &scheduler, persistence, buffer_size);
     pin_mut!(updates);
     while let Some(result) = updates.next().await {
         match result {
@@ -276,6 +298,7 @@ fn parse_args_config(
                 url,
                 conditions,
                 headers,
+                buffer_size,
             } => {
                 let headers = if headers.is_empty() {
                     None
@@ -302,6 +325,7 @@ fn parse_args_config(
                                 headers: headers.clone(),
                             }),
                             condition: condition.to_smolstr(),
+                            buffer_size,
                         })
                         .collect(),
                 ))

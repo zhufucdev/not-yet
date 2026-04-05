@@ -26,6 +26,8 @@ pub struct Model {
     pub kind: Kind,
     #[sea_orm(belongs_to, from = "user_id", to = "id")]
     pub user: HasOne<user::Entity>,
+    #[sea_orm(default_value = "i32::MAX")]
+    pub buffer_size: i32,
 
     #[sea_orm(has_one)]
     pub rss: HasOne<rss::Entity>,

@@ -33,6 +33,8 @@ pub enum Command {
         /// Extra headers, cURL style
         #[clap(short = 'H', long = "header")]
         headers: Vec<String>,
+        #[clap(short, long, default_value = "usize::MAX")]
+        buffer_size: usize,
     },
     Daemon,
 }

@@ -38,6 +38,8 @@ pub struct Schedule {
 pub struct Subscription {
     pub feed: Feed,
     pub condition: SmolStr,
+    #[serde(default = "default_sub_buffer_size")]
+    pub buffer_size: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -112,4 +114,8 @@ impl ToFeed<AtomFeed> for AtomConfig {
                 .as_ref(),
         )?)
     }
+}
+
+fn default_sub_buffer_size() -> usize {
+    usize::MAX
 }
