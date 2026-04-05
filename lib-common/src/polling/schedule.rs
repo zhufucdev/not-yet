@@ -67,6 +67,7 @@ impl<K: KeyContract> FromIterator<Schedule<K>> for Scheduler<K> {
                 task_queue.insert(schedule.key().clone(), bt);
             };
         }
+        event!(Level::DEBUG, "loaded {} schedules", schedules.len());
 
         Self {
             task_queue: Arc::new(RwLock::new(task_queue)),
@@ -174,27 +175,33 @@ impl<K: KeyContract> Scheduler<K> {
                     return;
                 };
                 let span = expected_next.schedule().trace_span.clone();
-                span.in_scope(|| event!(Level::DEBUG, "waiting for next run"));
-                tokio::select! {
-                    schedule = reschedule_rx.recv() => {
-                        if let Ok((_, schedule)) = schedule
-                            && key.is_none_or(|k| schedule.key() == k)
-                            && schedule.get_next_run_time().is_some_and(|t| t < expected_next.due_time())
-                        {
-                            yield Err(TaskCancellationError)
-                        } else {
-                            continue
+                let due_time = expected_next.get_due_instant();
+                loop {
+                    span.in_scope(|| event!(Level::DEBUG, "waiting for next run"));
+                    tokio::select! {
+                        schedule = reschedule_rx.recv() => {
+                            if let Ok((_, schedule)) = schedule
+                                && key.is_none_or(|k| schedule.key() == k)
+                                && schedule.get_next_run_time().is_some_and(|t| t < expected_next.due_time())
+                            {
+                                span.in_scope(|| event!(Level::DEBUG, "signaled to cancel"));
+                                yield Err(TaskCancellationError)
+                            } else {
+                                span.in_scope(|| event!(Level::DEBUG, "signaled to retry"));
+                                continue
+                            }
                         }
-                    }
-                    _ = tokio::time::sleep_until(expected_next.get_due_instant().into()) => {
-                        span.in_scope(|| event!(Level::DEBUG, "signaled to run"));
-                        *expected_next.state.write().await = TaskState::Running;
-                        self.add_to_task_queue(expected_next.schedule.clone()).await;
-                        let state = expected_next.state.clone();
-                        yield Ok(expected_next);
-                        *state.write().await = TaskState::Finished;
-                    }
-                };
+                        _ = tokio::time::sleep_until(due_time.into()) => {
+                            span.in_scope(|| event!(Level::DEBUG, "signaled to run"));
+                            *expected_next.state.write().await = TaskState::Running;
+                            self.add_to_task_queue(expected_next.schedule.clone()).await;
+                            let state = expected_next.state.clone();
+                            yield Ok(expected_next);
+                            *state.write().await = TaskState::Finished;
+                            break;
+                        }
+                    };
+                }
             }
         }
     }
