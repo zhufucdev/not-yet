@@ -1,10 +1,8 @@
 {
   lib,
-  pkgs,
   stdenv,
   autoAddDriverRunpath,
-
-  fetchFromGitHub,
+  craneLib,
   rustPlatform,
   cudaPackages,
   features ? [ ],
@@ -16,38 +14,29 @@
 let
   cudaSupport = lib.elem "cuda" features;
   effectiveStdenv = if cudaSupport then cudaPackages.backendStdenv else stdenv;
-  cudaBuildInputs = with cudaPackages; [
-    cuda_cccl # <nv/target>
 
-    # A temporary hack for reducing the closure size, remove once cudaPackages
-    # have stopped using lndir: https://github.com/NixOS/nixpkgs/issues/271792
+  # Use crane's built-in source cleaning
+  src =
+    let
+      promptOrCargo =
+        path: type: (builtins.match ".*prompt/.*$" path != null) || (craneLib.filterCargoSources path type);
+    in
+    lib.cleanSourceWith {
+      src = ../.;
+      filter = promptOrCargo;
+      name = "source";
+    };
+
+  cudaBuildInputs = with cudaPackages; [
+    cuda_cccl
     cuda_cudart
     libcublas
   ];
-in
-rustPlatform.buildRustPackage.override { stdenv = effectiveStdenv; } rec {
-  pname = "not-yet";
-  version = "0.2.0";
-
-  src = lib.cleanSourceWith {
-    filter =
-      name: type:
-      let
-        noneOf = builtins.all (x: !x);
-        baseName = baseNameOf name;
-      in
-      noneOf [
-        (lib.hasSuffix ".nix" name) # Ignore *.nix files when computing outPaths
-        (lib.hasSuffix ".md" name) # Ignore *.md changes whe computing outPaths
-        (lib.hasPrefix "." baseName) # Skip hidden files and directories
-        (baseName == "flake.lock")
-      ];
-    src = lib.cleanSource ../.;
-  };
 
   nativeBuildInputs = [
     pkg-config
     cmake
+    rustPlatform.bindgenHook
   ]
   ++ lib.optionals cudaSupport [
     cudaPackages.cuda_nvcc
@@ -55,17 +44,9 @@ rustPlatform.buildRustPackage.override { stdenv = effectiveStdenv; } rec {
   ];
 
   buildInputs = [
-    rustPlatform.bindgenHook
     openssl
   ]
   ++ lib.optionals cudaSupport cudaBuildInputs;
-
-  cargoLock = {
-    lockFile = "${src}/Cargo.lock";
-    allowBuiltinFetchGit = true;
-  };
-
-  buildFeatures = features;
 
   env = lib.optionalAttrs cudaSupport {
     CUDA_COMPUTE_CAP = "89";
@@ -76,4 +57,30 @@ rustPlatform.buildRustPackage.override { stdenv = effectiveStdenv; } rec {
       "-L ${cudaPackages.libcublas.static}/lib"
     ];
   };
-}
+
+  # Common args shared between dep-only and full builds
+  commonArgs = {
+    inherit
+      src
+      nativeBuildInputs
+      buildInputs
+      env
+      ;
+    stdenv = p: effectiveStdenv;
+    cargoExtraArgs = lib.concatMapStringsSep " " (f: "--features ${f}") features;
+    # Tell crane not to run tests in the build phase
+    doCheck = false;
+  };
+
+  # Build only dependencies first (allows caching the heavy compile step)
+  cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+in
+craneLib.buildPackage (
+  commonArgs
+  // {
+    inherit cargoArtifacts;
+    pname = "not-yet";
+    version = "0.2.0";
+  }
+)

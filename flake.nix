@@ -2,10 +2,17 @@
   description = "An over-engineered Hello World in C";
 
   # Nixpkgs / NixOS version to use.
-  inputs.nixpkgs.url = "nixpkgs/nixos-unstable";
+  inputs = {
+    nixpkgs.url = "nixpkgs/nixos-unstable";
+    crane.url = "github:ipetkov/crane";
+  };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      crane,
+    }:
     let
 
       # to work with older version of flakes
@@ -42,16 +49,27 @@
     {
 
       # A Nixpkgs overlay.
-      overlay = final: prev: {
-        not-yet = final.callPackage (import ./nix/package.nix) { features = [ "cuda" ]; } // {
-          telegram = final.callPackage (import ./nix/package.nix) {
-            features = [
-              "cuda"
-              "telegram"
-            ];
-          };
+      overlay =
+        final: prev:
+        let
+          craneLib = crane.mkLib final;
+        in
+        {
+          not-yet =
+            final.callPackage (import ./nix/package.nix) {
+              inherit craneLib;
+              features = [ "cuda" ];
+            }
+            // {
+              telegram = final.callPackage (import ./nix/package.nix) {
+                inherit craneLib;
+                features = [
+                  "cuda"
+                  "telegram"
+                ];
+              };
+            };
         };
-      };
 
       # Provide some binary packages for selected system types.
       packages = forAllSystems (system: {
