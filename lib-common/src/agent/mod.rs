@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::{
     agent::{
         error::GetTruthValueError,
+        ext::RunnerAsyncExt,
         memory::{Decision, DecisionMemory},
         template::{AsBorrowedMessages, PromptMacros},
     },
@@ -12,12 +13,13 @@ use crate::{
 };
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, future};
-use llama_runner::{VisionLmRequest, VisionLmRunner, VisionLmRunnerExt};
+use llama_runner::{RunnerRequest, VisionLmRequest, VisionLmRunner, VisionLmRunnerExt};
 use smol_str::ToSmolStr;
 use tokio::{pin, sync::RwLock};
 use tracing::{Instrument, Level, debug_span, event, info_span};
 
 pub mod error;
+mod ext;
 pub mod memory;
 mod template;
 
@@ -117,11 +119,13 @@ where
                 .get_runner()
                 .await
                 .map_err(GetTruthValueError::Model)?;
-            let res = runner.get_vlm_response(VisionLmRequest {
-                messages: messages.as_ref_msg(),
-                prefill: Some("<think>\n".into()),
-                ..Default::default()
-            })?;
+            let res = runner
+                .get_vlm_response_async(RunnerRequest {
+                    messages: messages,
+                    prefill: Some("<think>\n".into()),
+                    ..Default::default()
+                })
+                .await?;
             event!(Level::DEBUG, "full response from LLM: \n{}", res);
             Ok(res)
         }
