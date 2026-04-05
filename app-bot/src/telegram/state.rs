@@ -1,22 +1,29 @@
 use smol_str::SmolStr;
 
+use crate::db::subscription;
+
 #[derive(Clone, Default)]
 pub enum State {
     #[default]
     Start,
     Authenticating,
     ChoosingSubscriptionKind,
-    ChoseRss,
-    GotRssUrl {
-        url: SmolStr,
+    ChoseFeed {
+        kind: subscription::Kind,
     },
-    GotRssCondition {
+    GotFeedUrl {
+        url: SmolStr,
+        kind: subscription::Kind,
+    },
+    GotFeedCondition {
         condition: SmolStr,
         url: SmolStr,
+        kind: subscription::Kind,
     },
-    GotRssMockBrowserUa {
+    GotFeedMockBrowserUa {
         mock: bool,
         condition: SmolStr,
         url: SmolStr,
+        kind: subscription::Kind,
     },
 }

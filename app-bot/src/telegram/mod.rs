@@ -1,10 +1,11 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
 
 use ::futures::future;
 use anyhow::{Context, anyhow};
 use app_common::config::ParseConfigPath;
+use async_stream::{stream, try_stream};
 use clap::Parser;
-use futures::{TryStreamExt, pin_mut};
+use futures::{Stream, TryStreamExt, pin_mut};
 use itertools::Itertools;
 use lib_common::{
     agent::{LlmConditionMatcher, memory::sqlite::SqliteDecisionMemory},
@@ -13,7 +14,7 @@ use lib_common::{
         timeout::{ModelProducer, TimedModel},
     },
     polling::{Schedule, Scheduler, schedule::QueueType, task::Task},
-    source::{Feed, RssFeed},
+    source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed, atom::AtomFeed},
     update::sqlite::SqliteUpdatePersistence,
 };
 use llama_runner::{
@@ -21,6 +22,7 @@ use llama_runner::{
 };
 use migration::FromValueTuple;
 use sea_orm::{ActiveEnum, DatabaseConnection, EntityTrait, Iterable, ModelTrait, TryFromU64};
+use serde::{Serialize, de::DeserializeOwned};
 use smol_str::SmolStr;
 use teloxide::{
     dispatching::{
@@ -40,11 +42,11 @@ use crate::{
     },
     config::Config,
     db::{
-        self, rss,
+        self, atom, rss,
         subscription::{self, SubscriptionId},
         user::AccessLevel,
     },
-    rss::add_rss_subscription_for,
+    rss::add_feed_subscription_for,
     telegram::{args::Args, command::Command, repmark::button_repmark, state::State},
     token::OnetimeToken,
 };
@@ -66,7 +68,6 @@ pub(super) async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     tracing_subscriber::fmt()
         .with_max_level(args.verbosity)
-        .with_env_filter("lib_common=trace,app_common=trace,app_bot=trace")
         .init();
     let data_path = args.config.parse_config()?;
     let config = app_common::config::parse_config::<Config>(
@@ -152,14 +153,19 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         .endpoint(chose_subscription_type),
                 )
                 .branch(
-                    dptree::case![State::GotRssCondition { condition, url }]
-                        .endpoint(choose_rss_mock_browser),
+                    dptree::case![State::GotFeedCondition {
+                        condition,
+                        url,
+                        kind,
+                    }]
+                    .endpoint(choose_rss_mock_browser),
                 )
                 .branch(
-                    dptree::case![State::GotRssMockBrowserUa {
+                    dptree::case![State::GotFeedMockBrowserUa {
                         mock,
                         condition,
-                        url
+                        url,
+                        kind,
                     }]
                     .endpoint(choose_rss_custom_headers),
                 ),
@@ -173,13 +179,16 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         .branch(dptree::case![Command::Start].endpoint(start)),
                 )
                 .branch(dptree::case![State::Authenticating].endpoint(authenticate))
-                .branch(dptree::case![State::ChoseRss].endpoint(receive_rss_url))
-                .branch(dptree::case![State::GotRssUrl { url }].endpoint(receive_rss_condition))
+                .branch(dptree::case![State::ChoseFeed { kind }].endpoint(receive_rss_url))
                 .branch(
-                    dptree::case![State::GotRssMockBrowserUa {
+                    dptree::case![State::GotFeedUrl { url, kind }].endpoint(receive_rss_condition),
+                )
+                .branch(
+                    dptree::case![State::GotFeedMockBrowserUa {
                         mock,
                         condition,
-                        url
+                        url,
+                        kind
                     }]
                     .endpoint(receive_rss_custom_headers),
                 ),
@@ -198,8 +207,9 @@ async fn start_polling_all(
         let scheduler = scheduler.clone();
         let sub_id = *schedule.key();
         async move {
-            let Some((sub, rss)) = subscription::Entity::find_by_id(sub_id)
+            let Some((sub, rss, atom)) = subscription::Entity::find_by_id(sub_id)
                 .find_also_related(rss::Entity)
+                .find_also_related(atom::Entity)
                 .one(db)
                 .await?
             else {
@@ -207,42 +217,39 @@ async fn start_polling_all(
                 return Ok(());
             };
 
-            if let Some(rss) = rss {
-                let feed: RssFeed = rss.try_into()?;
-                let decider = LlmConditionMatcher::new(
-                    model,
-                    sub.condition,
-                    SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?,
-                );
-                let updates = app_common::feed::check(
-                    &sub_id,
-                    &feed,
-                    &decider,
-                    &scheduler,
-                    SqliteUpdatePersistence::new(db.clone(), sub_id)?,
-                );
-                pin_mut!(updates);
-                while let Some((_, is_truthy)) = updates.try_next().await? {
-                    if is_truthy {
-                        let msg = match feed.get_metadata().await {
-                            Ok(meta) => format!(
-                                "Your subscription to \"{}\" ({}) has an update! Check it out",
-                                meta.name,
-                                feed.url()
-                            ),
-                            Err(err) => {
-                                event!(Level::WARN, "failed to fetch RSS feed metadata, falling back to URL only: {err}");
-                                format!(
-                                    "Your subscription to {} has an update! Check it out",
-                                    feed.url()
-                                )
-                            }
-                        };
-                        bot.send_message(teloxide::types::UserId(sub.user_id as u64), msg)
-                            .await?;
+            match sub.kind {
+                subscription::Kind::Rss => {
+                    let feed: RssFeed = rss.unwrap().try_into()?;
+                    let messages = get_update_messages(
+                        &feed,
+                        feed.url(),
+                        &sub,
+                        model,
+                        &scheduler,
+                        db,
+                        working_dir,
+                    );
+                    pin_mut!(messages);
+                    while let Some(msg) = messages.try_next().await? {
+                        bot.send_message(UserId(sub.user_id as u64), msg).await?;
                     }
                 }
-                return Ok(());
+                subscription::Kind::Atom => {
+                    let feed: AtomFeed = atom.unwrap().try_into()?;
+                    let messages = get_update_messages(
+                        &feed,
+                        feed.url(),
+                        &sub,
+                        model,
+                        &scheduler,
+                        db,
+                        working_dir,
+                    );
+                    pin_mut!(messages);
+                    while let Some(msg) = messages.try_next().await? {
+                        bot.send_message(UserId(sub.user_id as u64), msg).await?;
+                    }
+                }
             }
 
             Err(anyhow!("subscription has no associated feed"))
@@ -251,6 +258,59 @@ async fn start_polling_all(
     });
     future::try_join_all(tasks).await?;
     Ok(())
+}
+
+fn get_update_messages<Feed_>(
+    feed: &Feed_,
+    feed_url: &str,
+    sub: &subscription::Model,
+    model: TimedModel<RunnerWithRecommendedSampling<Gemma3VisionRunner>, CreateLlamaCppRunnerError>,
+    scheduler: &Scheduler<SubscriptionId>,
+    db: &DatabaseConnection,
+    working_dir: &Path,
+) -> impl Stream<Item = Result<String, anyhow::Error>>
+where
+    Feed_: Feed<Metadata = DefaultMetadata>,
+    Feed_::Item: LlmComprehendable + Hash + Serialize + DeserializeOwned + 'static,
+    Feed_::Error: Display,
+{
+    try_stream! {
+        let sub_id = sub.id;
+        let decider = LlmConditionMatcher::new(
+            model,
+            sub.condition.to_string(),
+            SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?,
+        );
+        let updates = app_common::feed::check(
+            &sub_id,
+            feed,
+            &decider,
+            &scheduler,
+            SqliteUpdatePersistence::new(db.clone(), sub_id)?,
+        );
+        pin_mut!(updates);
+        while let Some((_, is_truthy)) = updates.try_next().await? {
+            if is_truthy {
+                match feed.get_metadata().await {
+                    Ok(meta) => {yield format!(
+                        "Your subscription to \"{}\" ({}) has an update! Check it out",
+                        meta.name,
+                        feed_url
+                    )},
+                    Err(err) => {
+                        event!(
+                            Level::WARN,
+                            "failed to fetch RSS feed metadata, falling back to URL only: {err}"
+                        );
+                        yield format!(
+                            "Your subscription to {} has an update! Check it out",
+                            feed_url
+                        )
+                    }
+                };
+            }
+        }
+    }
 }
 
 async fn get_schedules(
@@ -388,10 +448,26 @@ async fn chose_subscription_type(
     };
     match kind {
         subscription::Kind::Rss => {
-            dialog.update(State::ChoseRss).await?;
+            dialog
+                .update(State::ChoseFeed {
+                    kind: subscription::Kind::Rss,
+                })
+                .await?;
             bot.send_message(
                 query.chat_id().unwrap(),
                 "Perfect! Let's fill in the details. Tell me, what's the URL to the RSS feed?",
+            )
+            .await?;
+        }
+        subscription::Kind::Atom => {
+            dialog
+                .update(State::ChoseFeed {
+                    kind: subscription::Kind::Atom,
+                })
+                .await?;
+            bot.send_message(
+                query.chat_id().unwrap(),
+                "Perfect! Let's fill in the details. Tell me, what's the URL to the Atom feed?",
             )
             .await?;
         }
@@ -399,13 +475,23 @@ async fn chose_subscription_type(
     Ok(())
 }
 
-async fn receive_rss_url(bot: Bot, msg: Message, dialog: MasterDialog) -> anyhow::Result<()> {
+async fn receive_rss_url(
+    bot: Bot,
+    msg: Message,
+    dialog: MasterDialog,
+    kind: subscription::Kind, // State::ChoseFeed
+) -> anyhow::Result<()> {
     let Some(url) = msg.text() else {
         bot.send_message(msg.chat_id().unwrap(), EMPTY_MESSAGE_RESPONSE)
             .await?;
         return Ok(());
     };
-    dialog.update(State::GotRssUrl { url: url.into() }).await?;
+    dialog
+        .update(State::GotFeedUrl {
+            url: url.into(),
+            kind,
+        })
+        .await?;
     bot.send_message(
         msg.chat_id().unwrap(),
         "Sure thing! Now, under what circumstances do you want to receive updates from this feed?",
@@ -418,7 +504,7 @@ async fn receive_rss_condition(
     bot: Bot,
     msg: Message,
     dialog: MasterDialog,
-    url: SmolStr,
+    (url, kind): (SmolStr, subscription::Kind), // State::GotFeedUrl
 ) -> anyhow::Result<()> {
     let chat_id = msg.chat_id().unwrap();
     let Some(text) = msg.text() else {
@@ -430,9 +516,10 @@ async fn receive_rss_condition(
         return Ok(());
     }
     dialog
-        .update(State::GotRssCondition {
+        .update(State::GotFeedCondition {
             condition: text.into(),
             url,
+            kind,
         })
         .await?;
     bot.send_message(msg.chat_id().unwrap(), "Great! But many sites may block access, unless they recoginze me as a web broswer. Do you want to add extra user agent headers to solve this issue?")
@@ -443,7 +530,7 @@ async fn receive_rss_condition(
 
 async fn choose_rss_mock_browser(
     bot: Bot,
-    (condition, url): (SmolStr, SmolStr), // State::GotRssUrl
+    (condition, url, kind): (SmolStr, SmolStr, subscription::Kind), // State::GotFeedUrl
     query: CallbackQuery,
     dialog: MasterDialog,
     db: DatabaseConnection,
@@ -458,35 +545,39 @@ async fn choose_rss_mock_browser(
     match action_id.as_str() {
         "y" => {
             dialog
-                .update(State::GotRssMockBrowserUa {
+                .update(State::GotFeedMockBrowserUa {
                     mock: true,
                     condition,
                     url,
+                    kind,
                 })
                 .await?
         }
         "n" => {
             dialog
-                .update(State::GotRssMockBrowserUa {
+                .update(State::GotFeedMockBrowserUa {
                     mock: false,
                     condition,
                     url,
+                    kind,
                 })
                 .await?;
         }
         "c" => {
             dialog
-                .update(State::GotRssMockBrowserUa {
+                .update(State::GotFeedMockBrowserUa {
                     mock: false,
                     condition,
                     url,
+                    kind,
                 })
                 .await?;
             bot.send_message(chat_id, CUSTOM_HEADERS_PROMPT).await?;
             return Ok(());
         }
         "s" => {
-            add_rss_subscription_for(user_id, url, condition, false, None, &db, &scheduler).await?;
+            add_feed_subscription_for(user_id, kind, url, condition, false, None, &db, &scheduler)
+                .await?;
             dialog.reset().await?;
             bot.send_message(chat_id, "I see. You are ready to go")
                 .await?;
@@ -510,7 +601,7 @@ async fn choose_rss_custom_headers(
     bot: Bot,
     query: CallbackQuery,
     dialog: MasterDialog,
-    (mock, condition, url): (bool, SmolStr, SmolStr), // State::GotRssMockBrowserUa
+    (mock, condition, url, kind): (bool, SmolStr, SmolStr, subscription::Kind), // State::GotRssMockBrowserUa
     db: DatabaseConnection,
     scheduler: Arc<Scheduler<SubscriptionId>>,
 ) -> anyhow::Result<()> {
@@ -525,7 +616,8 @@ async fn choose_rss_custom_headers(
             bot.send_message(chat_id, CUSTOM_HEADERS_PROMPT).await?;
         }
         "n" => {
-            add_rss_subscription_for(user_id, url, condition, mock, None, &db, &scheduler).await?;
+            add_feed_subscription_for(user_id, kind, url, condition, mock, None, &db, &scheduler)
+                .await?;
             dialog.reset().await?;
             bot.send_message(chat_id, "Perfect! You are ready to go")
                 .await?;
@@ -541,7 +633,7 @@ async fn choose_rss_custom_headers(
 async fn receive_rss_custom_headers(
     bot: Bot,
     msg: Message,
-    (mock, condition, url): (bool, SmolStr, SmolStr), // State::GotRssMockBrowserUa
+    (mock, condition, url, kind): (bool, SmolStr, SmolStr, subscription::Kind), // State::GotRssMockBrowserUa
     db: DatabaseConnection,
     scheduler: Arc<Scheduler<SubscriptionId>>,
 ) -> anyhow::Result<()> {
@@ -553,8 +645,9 @@ async fn receive_rss_custom_headers(
     let Some(user) = &msg.from else {
         return Ok(());
     };
-    match add_rss_subscription_for(
+    match add_feed_subscription_for(
         user.id.0 as UserId,
+        kind,
         url,
         condition,
         mock,

@@ -5,7 +5,7 @@ use sea_orm::prelude::*;
 use sea_orm::strum::Display;
 
 use crate::UserId;
-use crate::db::rss;
+use crate::db::{atom, rss};
 
 use super::user;
 
@@ -22,17 +22,24 @@ pub struct Model {
     pub interval_mins: Option<i32>,
     pub condition: String,
     pub user_id: UserId,
+    #[sea_orm(default_value = "0")]
+    pub kind: Kind,
     #[sea_orm(belongs_to, from = "user_id", to = "id")]
     pub user: HasOne<user::Entity>,
+
     #[sea_orm(has_one)]
     pub rss: HasOne<rss::Entity>,
+    #[sea_orm(has_one)]
+    pub atom: HasOne<atom::Entity>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Display)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Display)]
 #[sea_orm(rs_type = "i32", db_type = "Integer")]
 pub enum Kind {
     #[strum(to_string = "RSS")]
     Rss = 0,
+    #[strum(to_string = "Atom")]
+    Atom = 1,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

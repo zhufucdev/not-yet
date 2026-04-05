@@ -53,6 +53,10 @@ impl AtomFeed {
         })
     }
 
+    pub fn url(&self) -> &str {
+        self.url.as_str()
+    }
+
     async fn get_feed(&self) -> Result<atom_syndication::Feed, Error> {
         async {
             event!(Level::INFO, "fetching url");
@@ -132,7 +136,8 @@ impl AtomFeedItem {
     ) -> Result<Self, Error> {
         let json = serde_json::to_string(&entry)?;
         let extra = if let Some(content_xml) = entry.content().and_then(|content| content.value())
-            && let Ok(urls) = utils::extract_url_from_feed_item::<anyhow::Error>(content_xml, Some(1))
+            && let Ok(urls) =
+                utils::extract_url_from_feed_item::<anyhow::Error>(content_xml, Some(1))
         {
             future::join_all(
                 urls.into_iter()
