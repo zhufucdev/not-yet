@@ -4,7 +4,8 @@ use std::{
 };
 
 use async_trait::async_trait;
-use sea_orm::prelude::*;
+use sea_orm::{prelude::*, sea_query};
+use tracing::{Level, event};
 
 use crate::{source::LlmComprehendable, update::UpdatePersistence};
 
@@ -58,12 +59,14 @@ where
         item.hash(&mut hasher);
         let hash = hasher.finish();
 
-        let db = self.db.clone();
         let key = self.key.clone();
-        ActiveModel::builder()
-            .set_hash(hash as i64)
-            .set_key(key)
-            .insert(&db)
+        Entity::insert(ActiveModel::builder().set_hash(hash as i64).set_key(key))
+            .on_conflict(
+                sea_query::OnConflict::column(Column::Key)
+                    .update_column(Column::Hash)
+                    .to_owned(),
+            )
+            .exec(&self.db)
             .await?;
         Ok(())
     }

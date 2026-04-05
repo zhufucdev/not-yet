@@ -1,4 +1,4 @@
-use std::{fmt::Display, str::FromStr};
+use std::{fmt::Display, hash::Hash, str::FromStr};
 
 use futures::future;
 use reqwest::header::HeaderMap;
@@ -25,7 +25,7 @@ pub struct AtomFeed {
     span: tracing::Span,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtomFeedItem {
     title: String,
     json: String,
@@ -50,7 +50,7 @@ impl AtomFeed {
             url: url.clone(),
             client,
             cache: RwLock::new(None),
-            span: debug_span!("atom feed", url = ?url).clone(),
+            span: debug_span!("atom_feed", url = ?url).clone(),
         })
     }
 
@@ -60,7 +60,7 @@ impl AtomFeed {
 
     async fn get_feed(&self) -> Result<atom_syndication::Feed, Error> {
         async {
-            event!(Level::INFO, "fetching url");
+            event!(Level::INFO, "fetching Atom feed");
             let resposne = self
                 .client
                 .get(&self.url)
@@ -70,6 +70,16 @@ impl AtomFeed {
                 .error_for_status()
                 .inspect_err(|err| event!(Level::ERROR, "responded with failure status: {err}"))?;
 
+            event!(
+                Level::INFO,
+                "got status {}, content type {}",
+                resposne.status(),
+                resposne
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .map(|h| h.to_str().unwrap_or_default())
+                    .unwrap_or_default()
+            );
             Ok(atom_syndication::Feed::from_str(
                 resposne.text().await?.as_str(),
             )?)
@@ -179,6 +189,12 @@ impl AtomFeedItem {
 impl Display for AtomFeedItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.title)
+    }
+}
+
+impl Hash for AtomFeedItem {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.json.hash(state);
     }
 }
 

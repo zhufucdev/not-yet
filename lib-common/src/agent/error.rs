@@ -25,10 +25,10 @@ pub enum TemplateExpansionError {
 
 #[derive(Debug, Error)]
 pub enum GetTruthValueError<ModelError, MemoryError> {
-    #[error("model: {0}")]
+    #[error("agent model: {0}")]
     Model(ModelError),
-    #[error("runner: {0}")]
+    #[error("agent runner: {0}")]
     Runner(#[from] RunnerError),
-    #[error("memory: {0}")]
+    #[error("agent memory: {0}")]
     Memory(MemoryError),
 }

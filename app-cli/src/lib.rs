@@ -20,6 +20,7 @@ use sea_orm::DatabaseConnection;
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::ToSmolStr;
 use tracing::{Instrument, Level, debug_span, event, info_span};
+use tracing_subscriber::EnvFilter;
 
 use crate::{
     args::Args,
@@ -39,7 +40,12 @@ mod config;
 pub async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     tracing_subscriber::fmt()
-        .with_max_level(args.verbosity)
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(args.verbosity.tracing_level_filter().into())
+                .from_env()
+                .unwrap_or_default(),
+        )
         .init();
     let data_path = args.config.parse_config()?;
     let config = app_common::config::parse_config::<Config>(

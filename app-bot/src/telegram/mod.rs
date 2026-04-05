@@ -34,6 +34,7 @@ use teloxide::{
 };
 use tokio::{select, sync::RwLock};
 use tracing::{Instrument, Level, event, info_span};
+use tracing_subscriber::EnvFilter;
 
 use crate::{
     authenticator::{
@@ -67,7 +68,12 @@ pub type UserId = i64;
 pub(super) async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     tracing_subscriber::fmt()
-        .with_max_level(args.verbosity)
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(args.verbosity.tracing_level_filter().into())
+                .from_env()
+                .unwrap_or_default(),
+        )
         .init();
     let data_path = args.config.parse_config()?;
     let config = app_common::config::parse_config::<Config>(
@@ -124,12 +130,19 @@ pub(super) async fn main() -> anyhow::Result<()> {
                 );
                 loop {
                     select! {
-                        _ = start_polling_all(scheduler.clone(), model.clone(), &db, &data_path, &bot) => {
-                            event!(
-                                Level::INFO,
-                                "empty schedule queue, waiting 30s before retrying"
-                            );
-                            tokio::time::sleep(Duration::from_secs(30)).await;
+                        result = start_polling_all(scheduler.clone(), model.clone(), &db, &data_path, &bot) => {
+                            match result {
+                                Ok(_) => {
+                                    event!(
+                                        Level::WARN,
+                                        "empty schedule queue, waiting 30s before retrying"
+                                    );
+                                    tokio::time::sleep(Duration::from_secs(30)).await;
+                                },
+                                Err(err) => {
+                                    event!(Level::ERROR, "while polling: {err}");
+                                },
+                            }
                         },
                         Ok(QueueType::New) = scheduler.until_next_reschedule() => {},
                     }
@@ -316,6 +329,7 @@ where
                 }
             };
         }
+        event!(Level::WARN, "updates is supposed to be infinite, but ended prematurely. sub_id = {sub_id}");
     }
 }
 

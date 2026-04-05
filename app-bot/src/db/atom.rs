@@ -1,6 +1,7 @@
 use lib_common::source::atom::AtomFeed;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use sea_orm::prelude::*;
+use tracing::{Level, event};
 
 use crate::db::{error::ParseHeaderError, header};
 
@@ -38,6 +39,12 @@ impl TryInto<AtomFeed> for Model {
         if let Some(headers) = self.headers.map(header::parse_headers).transpose()? {
             extra_headers.extend(headers);
         }
+        event!(
+            Level::DEBUG,
+            "created Atom feed {:?} for subscription {}",
+            self.url,
+            self.subscription_id
+        );
         Ok(AtomFeed::new(self.url, Some(&extra_headers))?)
     }
 }

@@ -123,7 +123,7 @@ where
                     let fut: BoxFuture<_> = Box::pin(async move {
                         let mut items = items_cp.write().await;
                         let mut buffer = Vec::new();
-                        while buffer.len() > buffer_size
+                        while buffer.len() < buffer_size
                             && let Some(peek) = items.pop()
                         {
                             if !persistence.cmp(Some(&peek)).await? {
@@ -186,7 +186,6 @@ where
                             return Poll::Ready(Some(Err(Error::Persistence(e))));
                         }
                         Poll::Pending => {
-                            *this.state.borrow_mut() = UpdateState::Idle;
                             return Poll::Pending;
                         }
                     }
