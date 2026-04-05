@@ -1,3 +1,4 @@
+use chrono::{DateTime, FixedOffset, Utc};
 use futures::{FutureExt, future};
 use rss::Channel;
 use serde::{Deserialize, Serialize};
@@ -113,13 +114,18 @@ impl Updatable for RssFeed {
 
     async fn update(&self) -> Result<(), Self::Error> {
         let channel = self.get_rss_channel().await?;
-        let items =
-            futures::future::try_join_all(self.get_rss_channel().await?.items().iter().map(
-                async |item| -> Result<Self::Item, Self::Error> {
-                    LlmRssItem::from_item(item, &self.client).await
-                },
-            ))
-            .await?;
+        let mut rss_items = channel.items().iter().collect::<Vec<_>>();
+        rss_items.sort_by_key(|item| {
+            item.pub_date()
+                .and_then(|pd| DateTime::<FixedOffset>::parse_from_rfc2822(pd).ok())
+                .unwrap_or(Utc::now().fixed_offset())
+        });
+        let items = futures::future::try_join_all(rss_items.iter().map(
+            async |item| -> Result<Self::Item, Self::Error> {
+                LlmRssItem::from_item(item, &self.client).await
+            },
+        ))
+        .await?;
         *self.cache.write().await = Some((channel, items));
         Ok(())
     }

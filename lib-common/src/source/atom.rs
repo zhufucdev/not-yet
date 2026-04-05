@@ -101,7 +101,9 @@ impl Updatable for AtomFeed {
 
     async fn update(&self) -> Result<(), Self::Error> {
         let feed = self.get_feed().await?;
-        let items = future::join_all(feed.entries().iter().map(|entry| {
+        let mut entries = feed.entries().iter().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.updated());
+        let items = future::join_all(entries.iter().map(|entry| {
             async { AtomFeedItem::from_entry(entry, &self.client).await }
                 .instrument(debug_span!("item_from_entry", entry = ?entry.id()))
         }))
