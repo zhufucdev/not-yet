@@ -27,17 +27,16 @@ pub trait Updatable {
     type Item: Unpin + Send + Sync;
     type Error;
     async fn get_items(&self) -> Result<Vec<Self::Item>, Self::Error>;
-}
-
-pub trait UpdatableExt<W, D> {
-    fn persistent_distinct<'s, P>(&'s self, storage: P, waker: W) -> Update<'s, Self, P, W, D>
-    where
-        Self: Updatable + Sized,
-        P: UpdatePersistence<Item = Self::Item>;
+    async fn update(&self) -> Result<(), Self::Error>;
 }
 
 pub trait UpdateWakerExt<D> {
-    fn wake_update<'s, I, P>(self, source: &'s I, persistence: P) -> Update<'s, I, P, Self, D>
+    fn wake_update<'s, I, P>(
+        self,
+        source: &'s I,
+        persistence: P,
+        buffer_size: usize,
+    ) -> Update<'s, I, P, Self, D>
     where
         I: Updatable,
         P: UpdatePersistence<Item = I::Item>,
@@ -56,6 +55,7 @@ pin_project_lite::pin_project! {
         state: RefCell<UpdateState<'f, I::Item, I::Error, P::Error, D>>,
         #[pin]
         waker: W,
+        buffer_size: usize,
     }
 }
 
@@ -65,6 +65,7 @@ where
     P: UpdatePersistence<Item = I::Item>,
     I::Item: Unpin + Send + Sync,
     W: Stream<Item = Result<D, TaskCancellationError>>,
+    D: Clone,
 {
     type Item = Result<(Option<I::Item>, D), Error<I::Error, P::Error>>;
 
@@ -79,10 +80,10 @@ where
                             return Poll::Ready(None);
                         }
                         Poll::Ready(Some(Ok(data))) => {
-                            let fut = this.source.get_items();
-                            *this.state.borrow_mut() = UpdateState::Fetching {
+                            let fut = this.source.update();
+                            *this.state.borrow_mut() = UpdateState::UpdatingFeed {
                                 fut: Arc::new(RefCell::new(Box::pin(fut))),
-                                data: Arc::new(RefCell::new(Some(data))),
+                                data: Arc::new(data),
                             };
                         }
                         _ => {
@@ -91,7 +92,22 @@ where
                     }
                 }
 
-                UpdateState::Fetching { fut, data } => {
+                UpdateState::UpdatingFeed { fut, data } => match fut.borrow_mut().poll_unpin(cx) {
+                    Poll::Ready(Ok(_)) => {
+                        let fut = this.source.get_items();
+                        *this.state.borrow_mut() = UpdateState::FetchingFeed {
+                            fut: Arc::new(RefCell::new(Box::pin(fut))),
+                            data,
+                        };
+                    }
+                    Poll::Ready(Err(e)) => {
+                        *this.state.borrow_mut() = UpdateState::Idle;
+                        return Poll::Ready(Some(Err(Error::Fetch(e))));
+                    }
+                    Poll::Pending => return Poll::Pending,
+                },
+
+                UpdateState::FetchingFeed { fut, data } => {
                     let items = match fut.borrow_mut().poll_unpin(cx) {
                         Poll::Pending => return Poll::Pending, // waker registered by fut
                         Poll::Ready(Err(e)) => {
@@ -102,64 +118,79 @@ where
                     };
                     let items = Arc::new(RwLock::new(items));
                     let items_cp = items.clone();
+                    let buffer_size = *this.buffer_size;
                     let persistence = this.persistence.clone();
-                    let fut: BoxFuture<_> =
-                        Box::pin(
-                            async move { persistence.cmp(items_cp.read().await.last()).await },
-                        );
+                    let fut: BoxFuture<_> = Box::pin(async move {
+                        let mut items = items_cp.write().await;
+                        let mut buffer = Vec::new();
+                        while buffer.len() > buffer_size
+                            && let Some(peek) = items.pop()
+                        {
+                            if !persistence.cmp(Some(&peek)).await? {
+                                buffer.push(peek);
+                            }
+                        }
+                        Ok(buffer)
+                    });
                     *this.state.borrow_mut() = UpdateState::Comparing {
                         fut: Arc::new(RefCell::new(fut)),
-                        items,
                         data,
                     };
                 }
 
-                UpdateState::Comparing { fut, items, data } => {
-                    match fut.borrow_mut().poll_unpin(cx) {
-                        Poll::Pending => return Poll::Pending,
-                        Poll::Ready(Err(e)) => {
-                            *this.state.borrow_mut() = UpdateState::Idle;
-                            return Poll::Ready(Some(Err(Error::Persistence(e))));
-                        }
-                        Poll::Ready(Ok(true)) => {
-                            *this.state.borrow_mut() = UpdateState::Idle;
-                        }
-                        Poll::Ready(Ok(false)) => {
-                            let items_cp = items.clone();
-                            let persistence = this.persistence.clone();
-                            let fut: Arc<RefCell<BoxFuture<_>>> =
-                                Arc::new(RefCell::new(Box::pin(async move {
-                                    persistence.update(items_cp.read().await.last()).await
-                                })));
-                            *this.state.borrow_mut() = UpdateState::Updating { items, fut, data };
-                        }
-                    }
-                }
-
-                UpdateState::Updating { items, fut, data } => {
-                    match fut.borrow_mut().poll_unpin(cx) {
-                        Poll::Pending => return Poll::Pending,
-                        Poll::Ready(Err(e)) => {
-                            *this.state.borrow_mut() = UpdateState::Idle;
-                            return Poll::Ready(Some(Err(Error::Persistence(e))));
-                        }
-                        Poll::Ready(Ok(())) => {
-                            let fut: Arc<RefCell<BoxFuture<_>>> =
-                                Arc::new(RefCell::new(Box::pin(async move {
-                                    items.write().await.pop()
-                                })));
-                            *this.state.borrow_mut() = UpdateState::Updated { fut, data };
-                        }
-                    }
-                }
-
-                UpdateState::Updated { fut, data } => match fut.borrow_mut().poll_unpin(cx) {
-                    Poll::Ready(it) => {
-                        *this.state.borrow_mut() = UpdateState::Idle;
-                        return Poll::Ready(Some(Ok((it, data.borrow_mut().take().unwrap()))));
-                    }
+                UpdateState::Comparing { fut, data } => match fut.borrow_mut().poll_unpin(cx) {
                     Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(e)) => {
+                        *this.state.borrow_mut() = UpdateState::Idle;
+                        return Poll::Ready(Some(Err(Error::Persistence(e))));
+                    }
+                    Poll::Ready(Ok(mut buffer)) => {
+                        let persistence = this.persistence.clone();
+                        let push = buffer.pop();
+                        let buffer = Arc::new(RefCell::new(buffer));
+                        let fut: Arc<RefCell<BoxFuture<_>>> =
+                            Arc::new(RefCell::new(Box::pin(async move {
+                                persistence.update(push.as_ref()).await?;
+                                Ok(push)
+                            })));
+                        *this.state.borrow_mut() = UpdateState::ClearingBuffer {
+                            buffer,
+                            fut,
+                            data: data.clone(),
+                        };
+                    }
                 },
+
+                UpdateState::ClearingBuffer { buffer, fut, data } => {
+                    match fut.borrow_mut().poll_unpin(cx) {
+                        Poll::Ready(Ok(last_push)) => {
+                            if let Some(peek) = buffer.clone().borrow_mut().pop() {
+                                let persistence = this.persistence.clone();
+                                let fut: Arc<RefCell<BoxFuture<_>>> =
+                                    Arc::new(RefCell::new(Box::pin(async move {
+                                        persistence.update(Some(&peek)).await?;
+                                        Ok(Some(peek))
+                                    })));
+                                *this.state.borrow_mut() = UpdateState::ClearingBuffer {
+                                    buffer,
+                                    fut,
+                                    data: data.clone(),
+                                };
+                            } else {
+                                *this.state.borrow_mut() = UpdateState::Idle;
+                            }
+                            return Poll::Ready(Some(Ok((last_push, data.as_ref().clone()))));
+                        }
+                        Poll::Ready(Err(e)) => {
+                            *this.state.borrow_mut() = UpdateState::Idle;
+                            return Poll::Ready(Some(Err(Error::Persistence(e))));
+                        }
+                        Poll::Pending => {
+                            *this.state.borrow_mut() = UpdateState::Idle;
+                            return Poll::Pending;
+                        }
+                    }
+                }
             }
         }
     }
@@ -167,23 +198,22 @@ where
 
 enum UpdateState<'f, Item, FetchErr, UpdateErr, Data> {
     Idle,
-    Fetching {
+    UpdatingFeed {
+        fut: Arc<RefCell<BoxFuture<'f, Result<(), FetchErr>>>>,
+        data: Arc<Data>,
+    },
+    FetchingFeed {
         fut: Arc<RefCell<BoxFuture<'f, Result<Vec<Item>, FetchErr>>>>,
-        data: Arc<RefCell<Option<Data>>>,
+        data: Arc<Data>,
     },
     Comparing {
-        fut: Arc<RefCell<BoxFuture<'f, Result<bool, UpdateErr>>>>,
-        items: Arc<RwLock<Vec<Item>>>,
-        data: Arc<RefCell<Option<Data>>>,
+        fut: Arc<RefCell<BoxFuture<'f, Result<Vec<Item>, UpdateErr>>>>,
+        data: Arc<Data>,
     },
-    Updating {
-        items: Arc<RwLock<Vec<Item>>>,
-        fut: Arc<RefCell<BoxFuture<'f, Result<(), UpdateErr>>>>,
-        data: Arc<RefCell<Option<Data>>>,
-    },
-    Updated {
-        fut: Arc<RefCell<BoxFuture<'f, Option<Item>>>>,
-        data: Arc<RefCell<Option<Data>>>,
+    ClearingBuffer {
+        buffer: Arc<RefCell<Vec<Item>>>,
+        fut: Arc<RefCell<BoxFuture<'f, Result<Option<Item>, UpdateErr>>>>,
+        data: Arc<Data>,
     },
 }
 
@@ -191,21 +221,20 @@ impl<'a, I, F, U, D> Clone for UpdateState<'a, I, F, U, D> {
     fn clone(&self) -> Self {
         match self {
             Self::Idle => Self::Idle,
-            Self::Fetching { fut, data } => Self::Fetching {
+            Self::UpdatingFeed { fut, data } => Self::UpdatingFeed {
                 fut: fut.clone(),
                 data: data.clone(),
             },
-            Self::Comparing { fut, items, data } => Self::Comparing {
-                fut: fut.clone(),
-                items: items.clone(),
-                data: data.clone(),
-            },
-            Self::Updating { items, fut, data } => Self::Updating {
-                items: items.clone(),
+            Self::FetchingFeed { fut, data } => Self::FetchingFeed {
                 fut: fut.clone(),
                 data: data.clone(),
             },
-            Self::Updated { fut, data } => Self::Updated {
+            Self::Comparing { fut, data } => Self::Comparing {
+                fut: fut.clone(),
+                data: data.clone(),
+            },
+            Self::ClearingBuffer { buffer, fut, data } => Self::ClearingBuffer {
+                buffer: buffer.clone(),
                 fut: fut.clone(),
                 data: data.clone(),
             },
@@ -255,50 +284,43 @@ where
     P: UpdatePersistence<Item = I::Item>,
     I::Item: Unpin + Send + Sync,
     W: Stream<Item = Result<D, TaskCancellationError>>,
+    D: Clone,
 {
-    fn new_ref(source: &'f I, persistence: Arc<P>, waker: W) -> Self {
+    fn new_ref(source: &'f I, persistence: Arc<P>, waker: W, buffer_size: usize) -> Self {
         assert_stream(Update {
             source,
             persistence,
             state: RefCell::new(UpdateState::Idle),
             waker,
+            buffer_size,
         })
     }
 
-    fn new(source: &'f I, persistence: P, waker: W) -> Self {
-        Self::new_ref(source, Arc::new(persistence), waker)
+    fn new(source: &'f I, persistence: P, waker: W, buffer_size: usize) -> Self {
+        Self::new_ref(source, Arc::new(persistence), waker, buffer_size)
     }
 
     delegate_access_inner!(waker, W, ());
 }
 
-impl<S, W, D> UpdatableExt<W, D> for S
-where
-    S: Updatable + Sized,
-    S::Item: Unpin + Send + Sync,
-    W: Stream<Item = Result<D, TaskCancellationError>>,
-{
-    fn persistent_distinct<'s, P>(&'s self, storage: P, waker: W) -> Update<'s, Self, P, W, D>
-    where
-        Self: Updatable + Sized,
-        P: UpdatePersistence<Item = S::Item>,
-    {
-        Update::new(self, storage, waker)
-    }
-}
-
 impl<S, D> UpdateWakerExt<D> for S
 where
     S: Stream<Item = Result<D, TaskCancellationError>>,
+    D: Clone,
 {
-    fn wake_update<'s, I, P>(self, source: &'s I, persistence: P) -> Update<'s, I, P, Self, D>
+    fn wake_update<'s, I, P>(
+        self,
+        source: &'s I,
+        persistence: P,
+        buffer_size: usize,
+    ) -> Update<'s, I, P, Self, D>
     where
         I: Updatable,
         P: UpdatePersistence<Item = I::Item>,
         <I as Updatable>::Item: Unpin + Send + Sync,
         Self: Sized,
     {
-        Update::new(source, persistence, self)
+        Update::new(source, persistence, self, buffer_size)
     }
 }
 

@@ -5,16 +5,17 @@ use std::{
     io::{Write, stdout},
     path::{Path, PathBuf},
     time::Duration,
+    usize,
 };
 
-use anyhow::{Context, anyhow};
-use app_common::{config::ParseConfigPath, feed};
+use anyhow::anyhow;
+use app_common::config::ParseConfigPath;
 use clap::Parser;
 use futures::{StreamExt, future, pin_mut};
 use llama_runner::{
     Gemma3VisionRunner, RunnerWithRecommendedSampling, error::CreateLlamaCppRunnerError,
 };
-use reqwest::header::HeaderMap;
+use migration::prelude::serde_json;
 use sea_orm::DatabaseConnection;
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::ToSmolStr;
@@ -64,10 +65,12 @@ pub async fn main() -> anyhow::Result<()> {
                     event!(Level::INFO, "checking subscription {sub:?}");
                     match &sub.feed {
                         config::Feed::Rss(conf) => {
-                            oneshot(&scheduler, sub, conf.to_feed()?, &model, &db, &data_path).await?
+                            oneshot(&scheduler, sub, conf.to_feed()?, &model, &db, &data_path)
+                                .await?
                         }
                         config::Feed::Atom(conf) => {
-                            oneshot(&scheduler, sub, conf.to_feed()?, &model, &db, &data_path).await?
+                            oneshot(&scheduler, sub, conf.to_feed()?, &model, &db, &data_path)
+                                .await?
                         }
                     }
                 }
@@ -142,13 +145,16 @@ async fn oneshot<Feed_>(
     scheduler: &Scheduler<Subscription>,
     sub: &Subscription,
     feed: Feed_,
-    model: &TimedModel<RunnerWithRecommendedSampling<Gemma3VisionRunner>, CreateLlamaCppRunnerError>,
+    model: &TimedModel<
+        RunnerWithRecommendedSampling<Gemma3VisionRunner>,
+        CreateLlamaCppRunnerError,
+    >,
     db: &DatabaseConnection,
     data_path: &PathBuf,
 ) -> anyhow::Result<()>
 where
     Feed_: Feed + Send + Sync + 'static,
-    Feed_::Item: LlmComprehendable + Hash + Serialize + DeserializeOwned,
+    Feed_::Item: LlmComprehendable + Hash + Display + Serialize + DeserializeOwned,
     Feed_::Error: Display,
 {
     let _sc = scheduler
@@ -165,7 +171,7 @@ where
     pin_mut!(updates);
     let mut stdout_guard = stdout().lock();
     if let Some(result) = updates.next().await {
-        let (task, is_truthy) = result?;
+        let (_, task, is_truthy) = result?;
         event!(
             Level::INFO,
             "schedule id = {}, is_truthy = {is_truthy}",
@@ -194,7 +200,7 @@ async fn daemon<Feed_>(
 ) -> anyhow::Result<()>
 where
     Feed_: Feed<Metadata = DefaultMetadata> + Send + Sync + 'static,
-    Feed_::Item: LlmComprehendable + Hash + Serialize + DeserializeOwned,
+    Feed_::Item: LlmComprehendable + Hash + Display + Serialize + DeserializeOwned,
     Feed_::Error: Display,
 {
     let decider = LlmConditionMatcher::new(
@@ -211,14 +217,25 @@ where
     pin_mut!(updates);
     while let Some(result) = updates.next().await {
         match result {
-            Ok((task, is_truthy)) => {
+            Ok((title, task, is_truthy)) => {
                 let mut stdout_guard = stdout().lock();
                 if is_truthy {
-                    write!(&mut stdout_guard, "{sub_id}")?;
-                    if let Ok(metadata) = feed.get_metadata().await {
-                        write!(&mut stdout_guard, "\t{}", metadata.name)?;
+                    #[derive(Serialize)]
+                    struct Message {
+                        subscription_id: usize,
+                        #[serde(skip_serializing_if = "Option::is_none")]
+                        feed: Option<String>,
+                        #[serde(skip_serializing_if = "Option::is_none")]
+                        item: Option<String>,
                     }
-                    writeln!(&mut stdout_guard)?;
+                    serde_json::to_writer(
+                        &mut stdout_guard,
+                        &Message {
+                            subscription_id: sub_id,
+                            feed: feed.get_metadata().await.ok().map(|m| m.name),
+                            item: title,
+                        },
+                    );
                 } else {
                     event!(
                         Level::INFO,

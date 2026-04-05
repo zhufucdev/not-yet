@@ -271,7 +271,7 @@ fn get_update_messages<Feed_>(
 ) -> impl Stream<Item = Result<String, anyhow::Error>>
 where
     Feed_: Feed<Metadata = DefaultMetadata>,
-    Feed_::Item: LlmComprehendable + Hash + Serialize + DeserializeOwned + 'static,
+    Feed_::Item: LlmComprehendable + Hash + Display + Serialize + DeserializeOwned + 'static,
     Feed_::Error: Display,
 {
     try_stream! {
@@ -289,26 +289,32 @@ where
             SqliteUpdatePersistence::new(db.clone(), sub_id)?,
         );
         pin_mut!(updates);
-        while let Some((_, is_truthy)) = updates.try_next().await? {
-            if is_truthy {
-                match feed.get_metadata().await {
-                    Ok(meta) => {yield format!(
-                        "Your subscription to \"{}\" ({}) has an update! Check it out",
-                        meta.name,
-                        feed_url
-                    )},
-                    Err(err) => {
-                        event!(
-                            Level::WARN,
-                            "failed to fetch RSS feed metadata, falling back to URL only: {err}"
-                        );
-                        yield format!(
-                            "Your subscription to {} has an update! Check it out",
-                            feed_url
-                        )
-                    }
-                };
+        while let Some((title, _, is_truthy)) = updates.try_next().await? {
+            if !is_truthy {
+                continue;
             }
+
+            match feed.get_metadata().await {
+                Ok(meta) => {
+                    yield format!(
+                        "Your subscription to \"{}\" ({}) has an update! Check it out!\n{}",
+                        meta.name,
+                        feed_url,
+                        title.unwrap_or_default()
+                    ).trim_end().to_string();
+                },
+                Err(err) => {
+                    event!(
+                        Level::WARN,
+                        "failed to fetch RSS feed metadata, falling back to URL only: {err}"
+                    );
+                    yield format!(
+                        "Your subscription to {} has an update! Check it out!\n{}",
+                        feed_url,
+                        title.unwrap_or_default()
+                    ).trim_end().to_string();
+                }
+            };
         }
     }
 }

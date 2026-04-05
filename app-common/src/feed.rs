@@ -31,10 +31,18 @@ pub fn check<
     decider: &'f Decider_,
     scheduler: &Scheduler<Key>,
     persistence: Persistence,
-) -> impl Stream<Item = anyhow::Result<(Task<Key>, bool)>>
+) -> impl Stream<Item = anyhow::Result<(Option<String>, Task<Key>, bool)>>
 where
     Key: KeyContract + Display,
-    Item: LlmComprehendable + Hash + Serialize + DeserializeOwned + Send + Sync + Unpin + 'static,
+    Item: LlmComprehendable
+        + Hash
+        + Serialize
+        + DeserializeOwned
+        + Display
+        + Send
+        + Sync
+        + Unpin
+        + 'static,
     FeedError: Display,
     Feed_: Feed<Item = Item, Error = FeedError>,
     DeciderError: std::error::Error + Send + Sync + 'static,
@@ -44,7 +52,7 @@ where
 {
     scheduler
         .start_polling(Some(key))
-        .wake_update(feed, persistence)
+        .wake_update(feed, persistence, usize::MAX)
         .map_ok(move |(update, task)| {
             event!(
                 Level::DEBUG,
@@ -55,15 +63,21 @@ where
             (update, task)
         })
         .map_err(|err| anyhow!("update error: {err}"))
-        .then(async move |result| -> anyhow::Result<(Task<Key>, bool)> {
-            match result {
-                Ok((update, task)) => {
-                    let Some(material) = update else {
-                        return Ok((task, false));
-                    };
-                    Ok((task, decider.get_truth_value(material).await?))
+        .then(
+            async move |result| -> anyhow::Result<(Option<String>, Task<Key>, bool)> {
+                match result {
+                    Ok((update, task)) => {
+                        let Some(material) = update else {
+                            return Ok((None, task, false));
+                        };
+                        Ok((
+                            Some(material.to_string()),
+                            task,
+                            decider.get_truth_value(material).await?,
+                        ))
+                    }
+                    Err(err) => Err(err),
                 }
-                Err(err) => Err(err),
-            }
-        })
+            },
+        )
 }

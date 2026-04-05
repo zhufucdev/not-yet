@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
 use futures::future;
 use reqwest::header::HeaderMap;
@@ -21,12 +21,13 @@ use crate::{
 pub struct AtomFeed {
     client: reqwest::Client,
     url: String,
-    cache: RwLock<Option<atom_syndication::Feed>>,
+    cache: RwLock<Option<(atom_syndication::Feed, Vec<AtomFeedItem>)>>,
     span: tracing::Span,
 }
 
-#[derive(Debug, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct AtomFeedItem {
+    title: String,
     json: String,
     extra: Vec<UrlContent>,
 }
@@ -69,9 +70,9 @@ impl AtomFeed {
                 .error_for_status()
                 .inspect_err(|err| event!(Level::ERROR, "responded with failure status: {err}"))?;
 
-            let feed = atom_syndication::Feed::from_str(resposne.text().await?.as_str())?;
-            *self.cache.write().await = Some(feed.clone());
-            Ok(feed)
+            Ok(atom_syndication::Feed::from_str(
+                resposne.text().await?.as_str(),
+            )?)
         }
         .instrument(self.span.clone())
         .await
@@ -84,14 +85,21 @@ impl Updatable for AtomFeed {
     type Error = Error;
 
     async fn get_items(&self) -> Result<Vec<Self::Item>, Self::Error> {
+        let (_, items) = self.cache.read().await.clone().expect("call update first");
+        Ok(items)
+    }
+
+    async fn update(&self) -> Result<(), Self::Error> {
         let feed = self.get_feed().await?;
-        future::join_all(feed.entries().iter().map(|entry| {
+        let items = future::join_all(feed.entries().iter().map(|entry| {
             async { AtomFeedItem::from_entry(entry, &self.client).await }
                 .instrument(debug_span!("item_from_entry", entry = ?entry.id()))
         }))
         .await
         .into_iter()
-        .collect::<Result<Vec<_>, _>>()
+        .collect::<Result<Vec<_>, _>>()?;
+        *self.cache.write().await = Some((feed, items));
+        Ok(())
     }
 }
 
@@ -99,7 +107,7 @@ impl Feed for AtomFeed {
     type Metadata = DefaultMetadata;
 
     async fn get_metadata(&self) -> Result<Self::Metadata, <Self as Updatable>::Error> {
-        let title = if let Some(cache) = self.cache.read().await.as_ref() {
+        let title = if let Some((cache, _)) = self.cache.read().await.as_ref() {
             cache.title().to_string()
         } else {
             self.get_feed().await?.title().to_string()
@@ -151,7 +159,26 @@ impl AtomFeedItem {
         } else {
             Vec::new()
         };
-        Ok(Self { json, extra })
+        Ok(Self {
+            title: format!(
+                "{} {}",
+                entry.title().to_string(),
+                entry
+                    .links()
+                    .iter()
+                    .map(|link| link.href())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            json,
+            extra,
+        })
+    }
+}
+
+impl Display for AtomFeedItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.title)
     }
 }
 

@@ -2,7 +2,7 @@ use futures::{FutureExt, future};
 use rss::Channel;
 use serde::{Deserialize, Serialize};
 use smol_str::{SmolStr, ToSmolStr};
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{Instrument, Level, event, info_span};
@@ -22,19 +22,14 @@ use crate::{
 pub struct RssFeed {
     url: String,
     client: reqwest::Client,
-    cache: RwLock<Option<Channel>>,
+    cache: RwLock<Option<(Channel, Vec<LlmRssItem>)>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRssItem {
+    title: String,
     pub(crate) json: String,
     extra: Vec<UrlContent>,
-}
-
-impl std::hash::Hash for LlmRssItem {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.json.hash(state);
-    }
 }
 
 impl RssFeed {
@@ -81,7 +76,6 @@ impl RssFeed {
                     .unwrap_or_default()
             );
             let channel = Channel::from_str(resposne.text().await?.as_ref())?;
-            *self.cache.write().await = Some(channel.clone());
             Ok(channel)
         }
         .instrument(span)
@@ -97,7 +91,7 @@ impl Feed for RssFeed {
     type Metadata = DefaultMetadata;
 
     async fn get_metadata(&self) -> Result<Self::Metadata, Self::Error> {
-        let title = if let Some(channel) = self.cache.read().await.as_ref() {
+        let title = if let Some((channel, _)) = self.cache.read().await.as_ref() {
             channel.title().to_string()
         } else {
             self.get_rss_channel().await?.title().to_string()
@@ -113,40 +107,60 @@ impl Updatable for RssFeed {
     async fn get_items(
         &self,
     ) -> Result<Vec<<Self as Updatable>::Item>, <Self as Updatable>::Error> {
-        let channel = self.get_rss_channel().await?;
+        let (_, items) = self.cache.read().await.clone().expect("call update first");
+        return Ok(items);
+    }
 
-        futures::future::try_join_all(channel.items.into_iter().map(
-            async |item| -> Result<Self::Item, Self::Error> {
-                LlmRssItem::from_item(item, &self.client).await
-            },
-        ))
-        .await
+    async fn update(&self) -> Result<(), Self::Error> {
+        let channel = self.get_rss_channel().await?;
+        let items =
+            futures::future::try_join_all(self.get_rss_channel().await?.items().iter().map(
+                async |item| -> Result<Self::Item, Self::Error> {
+                    LlmRssItem::from_item(item, &self.client).await
+                },
+            ))
+            .await?;
+        *self.cache.write().await = Some((channel, items));
+        Ok(())
     }
 }
 
 impl LlmRssItem {
-    async fn from_item(item: rss::Item, client: &reqwest::Client) -> Result<Self, Error> {
+    async fn from_item(item: &rss::Item, client: &reqwest::Client) -> Result<Self, Error> {
         let span = info_span!("llm_rss_item.from_item");
-        let json = serde_json::to_string(&item)?;
+        let json = serde_json::to_string(item)?;
 
         async move {
-            let extra = if let Some(content) = item.content()
-                && let Ok(urls) = utils::extract_url_from_feed_item::<anyhow::Error>(content, Some(1))
-            {
-                future::join_all(
-                    urls.into_iter().map(async |url| {
+            let extra =
+                if let Some(content) = item.content()
+                    && let Ok(urls) =
+                        utils::extract_url_from_feed_item::<anyhow::Error>(content, Some(1))
+                {
+                    future::join_all(urls.into_iter().map(async |url| {
                         utils::get_url_content::<anyhow::Error>(url, client).await
-                    }),
-                )
-                .await
-                .into_iter()
-                .filter_map(|r| r.ok().flatten())
-                .collect()
-            } else {
-                Vec::new()
-            };
+                    }))
+                    .await
+                    .into_iter()
+                    .filter_map(|r| r.ok().flatten())
+                    .collect()
+                } else {
+                    Vec::new()
+                };
 
-            Ok(LlmRssItem { json, extra })
+            Ok(LlmRssItem {
+                title: format!(
+                    "{} {}",
+                    item.title()
+                        .or(item.description())
+                        .unwrap_or_default()
+                        .to_string(),
+                    item.link().unwrap_or_default()
+                )
+                .trim()
+                .to_string(),
+                json,
+                extra,
+            })
         }
         .instrument(span)
         .await
@@ -176,6 +190,18 @@ impl LlmComprehendable for LlmRssItem {
     }
 }
 
+impl Display for LlmRssItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.title)
+    }
+}
+
+impl std::hash::Hash for LlmRssItem {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.json.hash(state);
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("http: {0}")]
@@ -199,11 +225,8 @@ mod test {
     #[tokio::test]
     #[traced_test]
     async fn test_rss_feed_fetch_megaphone() {
-        let feed = RssFeed::new(
-            "https://feeds.megaphone.fm/GLT1412515089".to_string(),
-            None,
-        )
-        .unwrap();
+        let feed =
+            RssFeed::new("https://feeds.megaphone.fm/GLT1412515089".to_string(), None).unwrap();
         let items = feed.get_items().await.unwrap();
         assert!(!items.is_empty());
     }

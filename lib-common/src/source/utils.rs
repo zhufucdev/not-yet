@@ -9,7 +9,7 @@ use tracing::{Level, event};
 use crate::{llm::SharedImageOrText, serde_utils::DynImageConverter};
 
 #[serde_as]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UrlContent {
     Image {
         url: String,

@@ -51,7 +51,7 @@ impl<K: KeyContract> FromIterator<Schedule<K>> for Scheduler<K> {
         let schedules = iter.into_iter().map(Arc::new).collect::<Vec<_>>();
         for schedule in &schedules {
             if id_checker.contains(&schedule.id) {
-                panic!("Duplicate schedule id: {}", schedule.id);
+                panic!("duplicate schedule id: {}", schedule.id);
             }
             id_checker.insert(schedule.id);
         }
