@@ -16,16 +16,8 @@ let
   effectiveStdenv = if cudaSupport then cudaPackages.backendStdenv else stdenv;
 
   # Use crane's built-in source cleaning
-  src =
-    let
-      promptOrCargo =
-        path: type: (builtins.match ".*prompt/.*$" path != null) || (craneLib.filterCargoSources path type);
-    in
-    lib.cleanSourceWith {
-      src = ../.;
-      filter = promptOrCargo;
-      name = "source";
-    };
+  promptOrCargo =
+    path: type: (builtins.match ".*prompt/.*$" path != null) || (craneLib.filterCargoSources path type);
 
   cudaBuildInputs = with cudaPackages; [
     cuda_cccl
@@ -61,7 +53,6 @@ let
   # Common args shared between dep-only and full builds
   commonArgs = {
     inherit
-      src
       nativeBuildInputs
       buildInputs
       env
@@ -73,7 +64,9 @@ let
   };
 
   # Build only dependencies first (allows caching the heavy compile step)
-  cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+  cargoArtifacts = craneLib.buildDepsOnly commonArgs // {
+    src = lib.cleanCargoSource ../.;
+  };
 
 in
 craneLib.buildPackage (
@@ -82,5 +75,10 @@ craneLib.buildPackage (
     inherit cargoArtifacts;
     pname = "not-yet";
     version = "0.2.2";
+    src = lib.cleanSourceWith {
+      src = ../.;
+      filter = promptOrCargo;
+      name = "source";
+    };
   }
 )
