@@ -9,6 +9,7 @@
   pkg-config,
   openssl,
   cmake,
+  version ? "dev",
   ...
 }:
 let
@@ -65,10 +66,13 @@ let
   };
 
   # Build only dependencies first (allows caching the heavy compile step)
-  cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
-    src = craneLib.cleanCargoSource ../.;
-    version = "0.2.2";
-  });
+  cargoArtifacts = craneLib.buildDepsOnly (
+    commonArgs
+    // {
+      src = craneLib.cleanCargoSource ../.;
+      version = "0.2.2";
+    }
+  );
 
 in
 craneLib.buildPackage (
@@ -76,10 +80,12 @@ craneLib.buildPackage (
   // {
     inherit cargoArtifacts;
     pname = "not-yet";
+    inherit version;
     src = lib.sources.cleanSourceWith {
       src = ../.;
       filter = promptOrCargo;
       name = "source";
     };
+    APP_VERSION = version;
   }
 )

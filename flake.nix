@@ -53,18 +53,20 @@
         final: prev:
         let
           craneLib = crane.mkLib final;
+          gpuFeatures = if final.stdenv.hostPlatform.isDarwin then [ "metal" ] else [ "cuda" ];
         in
         {
           not-yet =
             final.callPackage (import ./nix/package.nix) {
               inherit craneLib;
-              features = [ "cuda" ];
+              inherit version;
+              features = gpuFeatures;
             }
             // {
               telegram = final.callPackage (import ./nix/package.nix) {
                 inherit craneLib;
-                features = [
-                  "cuda"
+                inherit version;
+                features = gpuFeatures ++ [
                   "telegram"
                 ];
               };

@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
 
 #[derive(Debug, Parser)]
+#[command(version = app_common::meta::VERSION, name = "not-yet-cli")]
 pub struct Args {
     /// Path to the configuration and data files,
     /// defaults to $XDG_CONFIG/notyet, where for the former

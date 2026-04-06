@@ -4,6 +4,7 @@ use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 
 #[derive(Debug, Parser)]
+#[command(version = app_common::meta::VERSION, name = "not-yet-tg")]
 pub struct Args {
     /// Verbose mode (-v, -vv, -vvv, etc.)
     #[command(flatten)]
