@@ -13,6 +13,8 @@ use crate::polling::error::TaskCancellationError;
 
 pub mod accept;
 pub mod sqlite;
+#[cfg(test)]
+mod test;
 
 #[trait_variant::make(Send)]
 pub trait UpdatePersistence: Unpin + Send + Sync + 'static {
@@ -128,9 +130,11 @@ where
                         {
                             if !persistence.cmp(Some(&peek)).await? {
                                 buffer.push(peek);
+                            } else {
+                                break;
                             }
                         }
-                        Ok(buffer)
+                        Ok((buffer, items.is_empty()))
                     });
                     *this.state.borrow_mut() = UpdateState::Comparing {
                         fut: Arc::new(RefCell::new(fut)),
@@ -144,13 +148,15 @@ where
                         *this.state.borrow_mut() = UpdateState::Idle;
                         return Poll::Ready(Some(Err(Error::Persistence(e))));
                     }
-                    Poll::Ready(Ok(mut buffer)) => {
+                    Poll::Ready(Ok((mut buffer, is_vacuum))) => {
                         let persistence = this.persistence.clone();
                         let push = buffer.pop();
                         let buffer = Arc::new(RefCell::new(buffer));
                         let fut: Arc<RefCell<BoxFuture<_>>> =
                             Arc::new(RefCell::new(Box::pin(async move {
-                                persistence.update(push.as_ref()).await?;
+                                if push.is_none() && is_vacuum || !push.is_none() {
+                                    persistence.update(push.as_ref()).await?;
+                                }
                                 Ok(push)
                             })));
                         *this.state.borrow_mut() = UpdateState::ClearingBuffer {
@@ -206,7 +212,7 @@ enum UpdateState<'f, Item, FetchErr, UpdateErr, Data> {
         data: Arc<Data>,
     },
     Comparing {
-        fut: Arc<RefCell<BoxFuture<'f, Result<Vec<Item>, UpdateErr>>>>,
+        fut: Arc<RefCell<BoxFuture<'f, Result<(Vec<Item>, bool /* is vacuum */), UpdateErr>>>>,
         data: Arc<Data>,
     },
     ClearingBuffer {
