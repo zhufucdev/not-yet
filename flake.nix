@@ -73,7 +73,7 @@
 
       # Provide some binary packages for selected system types.
       packages = forAllSystems (system: {
-        inherit (nixpkgsFor.${system}) default;
+        default = nixpkgsFor.${system}.not-yet;
       });
 
       # A NixOS module, if applicable (e.g. if the package provides a system service).

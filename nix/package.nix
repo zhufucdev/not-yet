@@ -58,15 +58,17 @@ let
       env
       ;
     stdenv = p: effectiveStdenv;
+
     cargoExtraArgs = lib.concatMapStringsSep " " (f: "--features ${f}") features;
     # Tell crane not to run tests in the build phase
     doCheck = false;
   };
 
   # Build only dependencies first (allows caching the heavy compile step)
-  cargoArtifacts = craneLib.buildDepsOnly commonArgs // {
-    src = lib.cleanCargoSource ../.;
-  };
+  cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
+    src = craneLib.cleanCargoSource ../.;
+    version = "0.2.2";
+  });
 
 in
 craneLib.buildPackage (
@@ -74,8 +76,7 @@ craneLib.buildPackage (
   // {
     inherit cargoArtifacts;
     pname = "not-yet";
-    version = "0.2.2";
-    src = lib.cleanSourceWith {
+    src = lib.sources.cleanSourceWith {
       src = ../.;
       filter = promptOrCargo;
       name = "source";
