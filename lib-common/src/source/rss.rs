@@ -204,7 +204,7 @@ impl Display for LlmRssItem {
 
 impl std::hash::Hash for LlmRssItem {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.json.hash(state);
+        self.title.hash(state); // effectively hashing name and url which is guid
     }
 }
 

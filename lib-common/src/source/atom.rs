@@ -196,7 +196,7 @@ impl Display for AtomFeedItem {
 
 impl Hash for AtomFeedItem {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.json.hash(state);
+        self.title.hash(state); // effectively hashing name and url which is guid
     }
 }
 
