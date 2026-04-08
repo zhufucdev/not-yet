@@ -1,6 +1,6 @@
 use core::error;
 
-use llama_runner::error::RunnerError;
+use llama_runner::error::{GenericRunnerError, RunnerError};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -24,11 +24,11 @@ pub enum TemplateExpansionError {
 }
 
 #[derive(Debug, Error)]
-pub enum GetTruthValueError<ModelError, MemoryError> {
+pub enum GetTruthValueError<ModelError, MemoryError, TmplError> {
     #[error("agent model: {0}")]
     Model(ModelError),
     #[error("agent runner: {0}")]
-    Runner(#[from] RunnerError),
+    Runner(#[from] GenericRunnerError<TmplError>),
     #[error("agent memory: {0}")]
     Memory(MemoryError),
 }

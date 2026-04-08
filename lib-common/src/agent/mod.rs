@@ -5,7 +5,7 @@ use crate::{
         error::GetTruthValueError,
         ext::RunnerAsyncExt,
         memory::{Decision, DecisionMemory},
-        template::{AsBorrowedMessages, PromptMacros},
+        template::PromptMacros,
     },
     llm::{self, SharedImageOrText},
     secure,
@@ -13,7 +13,10 @@ use crate::{
 };
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, future};
-use llama_runner::{RunnerRequest, VisionLmRequest, VisionLmRunner, VisionLmRunnerExt};
+use llama_runner::{
+    GenericRunnerRequest, VisionLmRunner,
+    mcp::{Qwen3ChatTemplate, Qwen3ChatTemplateError},
+};
 use smol_str::ToSmolStr;
 use tokio::{pin, sync::RwLock};
 use tracing::{Instrument, Level, debug_span, event, info_span};
@@ -55,7 +58,7 @@ where
     Memory::Material: Send + Sync,
 {
     type Material = Update;
-    type Error = GetTruthValueError<Model::Error, Memory::Error>;
+    type Error = GetTruthValueError<Model::Error, Memory::Error, Qwen3ChatTemplateError>;
 
     async fn get_truth_value(&self, update: Update) -> Result<bool, Self::Error> {
         let inference_span = info_span!("condition_matcher.get_truth_value.inference");
@@ -119,10 +122,11 @@ where
                 .get_runner()
                 .await
                 .map_err(GetTruthValueError::Model)?;
+            let tmpl = Qwen3ChatTemplate::new([]);
             let res = runner
-                .get_vlm_response_async(RunnerRequest {
-                    messages: messages,
-                    prefill: Some("<think>\n".into()),
+                .get_vlm_response_async(GenericRunnerRequest {
+                    messages,
+                    tmpl,
                     ..Default::default()
                 })
                 .await?;
