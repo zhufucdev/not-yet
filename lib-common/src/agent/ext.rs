@@ -23,7 +23,7 @@ pub trait RunnerAsyncExt<Tmpl: ChatTemplate> {
 
 impl<T, Tmpl> RunnerAsyncExt<Tmpl> for T
 where
-    for<'r, 'req> T: VisionLmRunner<'r, 'req> + 'static,
+    for<'r, 'req> T: VisionLmRunner<'r, 'req, Tmpl> + 'static,
     Tmpl: ChatTemplate + Send + 'static,
     Tmpl::Error: Send,
 {

@@ -15,7 +15,7 @@ use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, future};
 use llama_runner::{
     GenericRunnerRequest, VisionLmRunner,
-    mcp::{Qwen3ChatTemplate, Qwen3ChatTemplateError},
+    mcp::{Qwen3ChatTemplate, error::JinjaTemplateError},
 };
 use smol_str::ToSmolStr;
 use tokio::{pin, sync::RwLock};
@@ -51,14 +51,14 @@ impl<Model, Memory> LlmConditionMatcher<Model, Memory> {
 impl<Model, Runner, Update, Memory> Decider for LlmConditionMatcher<Model, Memory>
 where
     Model: llm::Model<Runner = Runner> + Sync + Send,
-    for<'r, 'req> Runner: VisionLmRunner<'r, 'req> + 'static,
+    for<'r, 'req> Runner: VisionLmRunner<'r, 'req, Qwen3ChatTemplate<'static>> + 'static,
     Update: LlmComprehendable + Send + Sync,
     Memory: DecisionMemory<Material = Update> + Send + Sync,
     Memory::Error: Send,
     Memory::Material: Send + Sync,
 {
     type Material = Update;
-    type Error = GetTruthValueError<Model::Error, Memory::Error, Qwen3ChatTemplateError>;
+    type Error = GetTruthValueError<Model::Error, Memory::Error, JinjaTemplateError>;
 
     async fn get_truth_value(&self, update: Update) -> Result<bool, Self::Error> {
         let inference_span = info_span!("condition_matcher.get_truth_value.inference");
@@ -122,7 +122,7 @@ where
                 .get_runner()
                 .await
                 .map_err(GetTruthValueError::Model)?;
-            let tmpl = Qwen3ChatTemplate::new([]);
+            let tmpl = Qwen3ChatTemplate::default().with_thinking();
             let res = runner
                 .get_vlm_response_async(GenericRunnerRequest {
                     messages,
@@ -139,16 +139,10 @@ where
 
         let post_process_span = debug_span!("condition_matcher.get_truth_value.post_process");
         async {
-            loop {
-                if let Some(think_start) = response.find("<think>")
-                    && let Some(think_end) = response.find("</think>")
-                {
-                    response =
-                        format!("{}{}", &response[..think_start], &response[think_end + 8..]);
-                } else {
-                    break;
-                }
-            }
+            response = response
+                .split_once("</think>")
+                .map(|(l, r)| r.trim_start().to_string())
+                .unwrap_or(response);
             event!(
                 Level::DEBUG,
                 "response after stripping out ttc: \n{}",
