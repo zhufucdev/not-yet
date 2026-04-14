@@ -1,0 +1,102 @@
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Hacker News: Newest</title><link>https://news.ycombinator.com/newest</link><description>Hacker News RSS</description><docs>https://hnrss.org/</docs><generator>hnrss v2.1.1</generator><lastBuildDate>Tue, 14 Apr 2026 03:29:40 +0000</lastBuildDate><atom:link href="https://hnrss.org/newest?points=100" rel="self" type="application/rss+xml"></atom:link><item><title><![CDATA[Lean proved this program correct; then I found a bug]]></title><description><![CDATA[
+<p>Article URL: <a href="https://kirancodes.me/posts/log-who-watches-the-watchers.html">https://kirancodes.me/posts/log-who-watches-the-watchers.html</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47759709">https://news.ycombinator.com/item?id=47759709</a></p>
+<p>Points: 126</p>
+<p># Comments: 69</p>
+]]></description><pubDate>Tue, 14 Apr 2026 00:25:08 +0000</pubDate><link>https://kirancodes.me/posts/log-who-watches-the-watchers.html</link><dc:creator>bumbledraven</dc:creator><comments>https://news.ycombinator.com/item?id=47759709</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47759709</guid></item><item><title><![CDATA[Stanford report highlights growing disconnect between AI insiders and everyone]]></title><description><![CDATA[
+<p>Article URL: <a href="https://techcrunch.com/2026/04/13/stanford-report-highlights-growing-disconnect-between-ai-insiders-and-everyone-else/">https://techcrunch.com/2026/04/13/stanford-report-highlights-growing-disconnect-between-ai-insiders-and-everyone-else/</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47758028">https://news.ycombinator.com/item?id=47758028</a></p>
+<p>Points: 221</p>
+<p># Comments: 304</p>
+]]></description><pubDate>Mon, 13 Apr 2026 21:25:38 +0000</pubDate><link>https://techcrunch.com/2026/04/13/stanford-report-highlights-growing-disconnect-between-ai-insiders-and-everyone-else/</link><dc:creator>ZeidJ</dc:creator><comments>https://news.ycombinator.com/item?id=47758028</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47758028</guid></item><item><title><![CDATA[The tech jobs bust is real. Don't blame AI (yet)]]></title><description><![CDATA[
+<p>Article URL: <a href="https://economist.com/finance-and-economics/2026/04/13/the-tech-jobs-bust-is-real-dont-blame-ai-yet">https://economist.com/finance-and-economics/2026/04/13/the-tech-jobs-bust-is-real-dont-blame-ai-yet</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47757775">https://news.ycombinator.com/item?id=47757775</a></p>
+<p>Points: 106</p>
+<p># Comments: 146</p>
+]]></description><pubDate>Mon, 13 Apr 2026 21:02:21 +0000</pubDate><link>https://economist.com/finance-and-economics/2026/04/13/the-tech-jobs-bust-is-real-dont-blame-ai-yet</link><dc:creator>andsoitis</dc:creator><comments>https://news.ycombinator.com/item?id=47757775</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47757775</guid></item><item><title><![CDATA[GitHub Stacked PRs]]></title><description><![CDATA[
+<p>Article URL: <a href="https://github.github.com/gh-stack/">https://github.github.com/gh-stack/</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47757495">https://news.ycombinator.com/item?id=47757495</a></p>
+<p>Points: 489</p>
+<p># Comments: 269</p>
+]]></description><pubDate>Mon, 13 Apr 2026 20:36:49 +0000</pubDate><link>https://github.github.com/gh-stack/</link><dc:creator>ezekg</dc:creator><comments>https://news.ycombinator.com/item?id=47757495</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47757495</guid></item><item><title><![CDATA[GAIA – Open-source framework for building AI agents that run on local hardware]]></title><description><![CDATA[
+<p>Article URL: <a href="https://amd-gaia.ai/docs">https://amd-gaia.ai/docs</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47756772">https://news.ycombinator.com/item?id=47756772</a></p>
+<p>Points: 104</p>
+<p># Comments: 24</p>
+]]></description><pubDate>Mon, 13 Apr 2026 19:28:41 +0000</pubDate><link>https://amd-gaia.ai/docs</link><dc:creator>galaxyLogic</dc:creator><comments>https://news.ycombinator.com/item?id=47756772</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47756772</guid></item><item><title><![CDATA[Show HN: Ithihāsas – a character explorer for Hindu epics, built in a few hours]]></title><description><![CDATA[
+<p>Hi HN!<p>I’ve always found it hard to explore the Mahābhārata and Rāmāyaṇa online. Most content is either long-form or scattered, and understanding a character like Karna or Bhishma usually means opening multiple tabs.<p>I built <a href="https://www.ithihasas.in/" rel="nofollow">https://www.ithihasas.in/</a> to solve that. It is a simple character explorer that lets you navigate the epics through people and their relationships instead of reading everything linearly.<p>This was also an experiment with Claude CLI. I was able to put together the first version in a couple of hours. It helped a lot with generating structured content and speeding up development, but UX and data consistency still needed manual work.<p>Would love feedback on the UX and whether this way of exploring mythology works for you.</p>
+<hr>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47756569">https://news.ycombinator.com/item?id=47756569</a></p>
+<p>Points: 119</p>
+<p># Comments: 28</p>
+]]></description><pubDate>Mon, 13 Apr 2026 19:10:07 +0000</pubDate><link>https://www.ithihasas.in</link><dc:creator>cvrajeesh</dc:creator><comments>https://news.ycombinator.com/item?id=47756569</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47756569</guid></item><item><title><![CDATA[How to make Firefox builds 17% faster]]></title><description><![CDATA[
+<p>Article URL: <a href="https://blog.farre.se/posts/2026/04/10/caching-webidl-codegen/">https://blog.farre.se/posts/2026/04/10/caching-webidl-codegen/</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47756321">https://news.ycombinator.com/item?id=47756321</a></p>
+<p>Points: 142</p>
+<p># Comments: 23</p>
+]]></description><pubDate>Mon, 13 Apr 2026 18:50:08 +0000</pubDate><link>https://blog.farre.se/posts/2026/04/10/caching-webidl-codegen/</link><dc:creator>mbitsnbites</dc:creator><comments>https://news.ycombinator.com/item?id=47756321</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47756321</guid></item><item><title><![CDATA[Someone bought 30 WordPress plugins and planted a backdoor in all of them]]></title><description><![CDATA[
+<p>Article URL: <a href="https://anchor.host/someone-bought-30-wordpress-plugins-and-planted-a-backdoor-in-all-of-them/">https://anchor.host/someone-bought-30-wordpress-plugins-and-planted-a-backdoor-in-all-of-them/</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47755629">https://news.ycombinator.com/item?id=47755629</a></p>
+<p>Points: 744</p>
+<p># Comments: 211</p>
+]]></description><pubDate>Mon, 13 Apr 2026 17:54:39 +0000</pubDate><link>https://anchor.host/someone-bought-30-wordpress-plugins-and-planted-a-backdoor-in-all-of-them/</link><dc:creator>speckx</dc:creator><comments>https://news.ycombinator.com/item?id=47755629</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47755629</guid></item><item><title><![CDATA[Tax Wrapped 2025]]></title><description><![CDATA[
+<p>Article URL: <a href="https://taxwrapped.com">https://taxwrapped.com</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47755604">https://news.ycombinator.com/item?id=47755604</a></p>
+<p>Points: 103</p>
+<p># Comments: 58</p>
+]]></description><pubDate>Mon, 13 Apr 2026 17:52:39 +0000</pubDate><link>https://taxwrapped.com</link><dc:creator>entrapi</dc:creator><comments>https://news.ycombinator.com/item?id=47755604</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47755604</guid></item><item><title><![CDATA[The Future of Everything Is Lies, I Guess: Safety]]></title><description><![CDATA[
+<p>Article URL: <a href="https://aphyr.com/posts/417-the-future-of-everything-is-lies-i-guess-safety">https://aphyr.com/posts/417-the-future-of-everything-is-lies-i-guess-safety</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47754379">https://news.ycombinator.com/item?id=47754379</a></p>
+<p>Points: 284</p>
+<p># Comments: 156</p>
+]]></description><pubDate>Mon, 13 Apr 2026 16:23:09 +0000</pubDate><link>https://aphyr.com/posts/417-the-future-of-everything-is-lies-i-guess-safety</link><dc:creator>aphyr</dc:creator><comments>https://news.ycombinator.com/item?id=47754379</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47754379</guid></item><item><title><![CDATA[Who's Been Impersonating This ProPublica Reporter?]]></title><description><![CDATA[
+<p>Article URL: <a href="https://www.propublica.org/article/impersonating-propublica-reporter">https://www.propublica.org/article/impersonating-propublica-reporter</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47754100">https://news.ycombinator.com/item?id=47754100</a></p>
+<p>Points: 112</p>
+<p># Comments: 2</p>
+]]></description><pubDate>Mon, 13 Apr 2026 16:05:19 +0000</pubDate><link>https://www.propublica.org/article/impersonating-propublica-reporter</link><dc:creator>hn_acker</dc:creator><comments>https://news.ycombinator.com/item?id=47754100</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47754100</guid></item><item><title><![CDATA[Missouri town fires half its city council over data center deal]]></title><description><![CDATA[
+<p>Article URL: <a href="https://www.politico.com/news/2026/04/13/missouri-city-council-data-center-00867259">https://www.politico.com/news/2026/04/13/missouri-city-council-data-center-00867259</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47754002">https://news.ycombinator.com/item?id=47754002</a></p>
+<p>Points: 123</p>
+<p># Comments: 128</p>
+]]></description><pubDate>Mon, 13 Apr 2026 15:59:54 +0000</pubDate><link>https://www.politico.com/news/2026/04/13/missouri-city-council-data-center-00867259</link><dc:creator>impish9208</dc:creator><comments>https://news.ycombinator.com/item?id=47754002</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47754002</guid></item><item><title><![CDATA[Building a CLI for all of Cloudflare]]></title><description><![CDATA[
+<p>Article URL: <a href="https://blog.cloudflare.com/cf-cli-local-explorer/">https://blog.cloudflare.com/cf-cli-local-explorer/</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47753689">https://news.ycombinator.com/item?id=47753689</a></p>
+<p>Points: 271</p>
+<p># Comments: 87</p>
+]]></description><pubDate>Mon, 13 Apr 2026 15:44:02 +0000</pubDate><link>https://blog.cloudflare.com/cf-cli-local-explorer/</link><dc:creator>soheilpro</dc:creator><comments>https://news.ycombinator.com/item?id=47753689</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47753689</guid></item><item><title><![CDATA[Claude.ai down]]></title><description><![CDATA[
+<p>Article URL: <a href="https://status.claude.com/incidents/6jd2m42f8mld">https://status.claude.com/incidents/6jd2m42f8mld</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47753643">https://news.ycombinator.com/item?id=47753643</a></p>
+<p>Points: 127</p>
+<p># Comments: 121</p>
+]]></description><pubDate>Mon, 13 Apr 2026 15:41:08 +0000</pubDate><link>https://status.claude.com/incidents/6jd2m42f8mld</link><dc:creator>rob</dc:creator><comments>https://news.ycombinator.com/item?id=47753643</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47753643</guid></item><item><title><![CDATA[Nothing Ever Happens: Polymarket bot that always buys No on non-sports markets]]></title><description><![CDATA[
+<p>Article URL: <a href="https://github.com/sterlingcrispin/nothing-ever-happens">https://github.com/sterlingcrispin/nothing-ever-happens</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47753472">https://news.ycombinator.com/item?id=47753472</a></p>
+<p>Points: 368</p>
+<p># Comments: 192</p>
+]]></description><pubDate>Mon, 13 Apr 2026 15:31:06 +0000</pubDate><link>https://github.com/sterlingcrispin/nothing-ever-happens</link><dc:creator>m-hodges</dc:creator><comments>https://news.ycombinator.com/item?id=47753472</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47753472</guid></item><item><title><![CDATA[This year’s insane timeline of hacks]]></title><description><![CDATA[
+<p>Article URL: <a href="https://ringmast4r.substack.com/p/we-may-be-living-through-the-most">https://ringmast4r.substack.com/p/we-may-be-living-through-the-most</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47752884">https://news.ycombinator.com/item?id=47752884</a></p>
+<p>Points: 287</p>
+<p># Comments: 171</p>
+]]></description><pubDate>Mon, 13 Apr 2026 14:53:05 +0000</pubDate><link>https://ringmast4r.substack.com/p/we-may-be-living-through-the-most</link><dc:creator>laurex</dc:creator><comments>https://news.ycombinator.com/item?id=47752884</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47752884</guid></item><item><title><![CDATA[Make tmux pretty and usable (2024)]]></title><description><![CDATA[
+<p>Article URL: <a href="https://hamvocke.com/blog/a-guide-to-customizing-your-tmux-conf/">https://hamvocke.com/blog/a-guide-to-customizing-your-tmux-conf/</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47752819">https://news.ycombinator.com/item?id=47752819</a></p>
+<p>Points: 326</p>
+<p># Comments: 208</p>
+]]></description><pubDate>Mon, 13 Apr 2026 14:48:55 +0000</pubDate><link>https://hamvocke.com/blog/a-guide-to-customizing-your-tmux-conf/</link><dc:creator>speckx</dc:creator><comments>https://news.ycombinator.com/item?id=47752819</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47752819</guid></item><item><title><![CDATA[Microsoft isn't removing Copilot from Windows 11, it's just renaming it]]></title><description><![CDATA[
+<p>Article URL: <a href="https://www.neowin.net/opinions/microsoft-isnt-removing-copilot-from-windows-11-its-just-renaming-it/">https://www.neowin.net/opinions/microsoft-isnt-removing-copilot-from-windows-11-its-just-renaming-it/</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47751936">https://news.ycombinator.com/item?id=47751936</a></p>
+<p>Points: 334</p>
+<p># Comments: 248</p>
+]]></description><pubDate>Mon, 13 Apr 2026 13:48:24 +0000</pubDate><link>https://www.neowin.net/opinions/microsoft-isnt-removing-copilot-from-windows-11-its-just-renaming-it/</link><dc:creator>bundie</dc:creator><comments>https://news.ycombinator.com/item?id=47751936</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47751936</guid></item><item><title><![CDATA[US appeals court declares 158-year-old home distilling ban unconstitutional]]></title><description><![CDATA[
+<p>Article URL: <a href="https://nypost.com/2026/04/11/us-news/us-appeals-court-declares-158-year-old-home-distilling-ban-unconstitutional/">https://nypost.com/2026/04/11/us-news/us-appeals-court-declares-158-year-old-home-distilling-ban-unconstitutional/</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47751781">https://news.ycombinator.com/item?id=47751781</a></p>
+<p>Points: 324</p>
+<p># Comments: 236</p>
+]]></description><pubDate>Mon, 13 Apr 2026 13:37:33 +0000</pubDate><link>https://nypost.com/2026/04/11/us-news/us-appeals-court-declares-158-year-old-home-distilling-ban-unconstitutional/</link><dc:creator>t-3</dc:creator><comments>https://news.ycombinator.com/item?id=47751781</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47751781</guid></item><item><title><![CDATA[They See Your Photos]]></title><description><![CDATA[
+<p>Article URL: <a href="https://theyseeyourphotos.com/">https://theyseeyourphotos.com/</a></p>
+<p>Comments URL: <a href="https://news.ycombinator.com/item?id=47751669">https://news.ycombinator.com/item?id=47751669</a></p>
+<p>Points: 124</p>
+<p># Comments: 110</p>
+]]></description><pubDate>Mon, 13 Apr 2026 13:27:51 +0000</pubDate><link>https://theyseeyourphotos.com/</link><dc:creator>cyberlurker</dc:creator><comments>https://news.ycombinator.com/item?id=47751669</comments><guid isPermaLink="false">https://news.ycombinator.com/item?id=47751669</guid></item></channel></rss>

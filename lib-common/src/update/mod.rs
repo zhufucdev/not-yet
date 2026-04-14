@@ -20,7 +20,9 @@ mod test;
 pub trait UpdatePersistence: Unpin + Send + Sync + 'static {
     type Item: Unpin + Send + Sync;
     type Error: Send;
+    /// Mark an item as seen
     async fn update(&self, item: Option<&Self::Item>) -> Result<(), Self::Error>;
+    /// If the given item is seen, return `true`, otherwise `false`
     async fn cmp(&self, current: Option<&Self::Item>) -> Result<bool, Self::Error>;
 }
 
