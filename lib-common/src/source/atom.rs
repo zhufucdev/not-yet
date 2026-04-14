@@ -3,7 +3,7 @@ use std::{fmt::Display, hash::Hash, str::FromStr};
 use futures::future;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
-use smol_str::ToSmolStr;
+use smol_str::{SmolStr, ToSmolStr};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{Instrument, Level, debug_span, event};
@@ -28,7 +28,7 @@ pub struct AtomFeed {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtomFeedItem {
     title: String,
-    json: String,
+    entry: atom_syndication::Entry,
     extra: Vec<UrlContent>,
 }
 
@@ -103,8 +103,8 @@ impl Updatable for AtomFeed {
         let feed = self.get_feed().await?;
         let mut entries = feed.entries().iter().collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.updated());
-        let items = future::join_all(entries.iter().map(|entry| {
-            async { AtomFeedItem::from_entry(entry, &self.client).await }
+        let items = future::join_all(entries.into_iter().map(|entry| {
+            async { AtomFeedItem::from_entry(entry.clone(), &self.client).await }
                 .instrument(debug_span!("item_from_entry", entry = ?entry.id()))
         }))
         .await
@@ -133,7 +133,10 @@ impl LlmComprehendable for AtomFeedItem {
 
     fn get_message(&self) -> Vec<SharedImageOrText> {
         let mut chunks = Vec::new();
-        chunks.push(self.json.to_smolstr().into());
+        let content = serde_json::to_string(&self.entry)
+            .map(SmolStr::from)
+            .unwrap_or_else(|_| self.title.to_smolstr());
+        chunks.push(content.into());
         chunks.extend(
             self.extra
                 .iter()
@@ -151,10 +154,9 @@ impl LlmComprehendable for AtomFeedItem {
 
 impl AtomFeedItem {
     pub async fn from_entry(
-        entry: &atom_syndication::Entry,
+        entry: atom_syndication::Entry,
         client: &reqwest::Client,
     ) -> Result<Self, Error> {
-        let json = serde_json::to_string(&entry)?;
         let extra = if let Some(content_xml) = entry.content().and_then(|content| content.value())
             && let Ok(urls) =
                 utils::extract_url_from_feed_item::<anyhow::Error>(content_xml, Some(1))
@@ -182,7 +184,7 @@ impl AtomFeedItem {
                     .collect::<Vec<_>>()
                     .join(" ")
             ),
-            json,
+            entry,
             extra,
         })
     }

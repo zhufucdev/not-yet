@@ -1,5 +1,5 @@
 use chrono::{DateTime, FixedOffset, Utc};
-use futures::{FutureExt, future};
+use futures::future;
 use rss::Channel;
 use serde::{Deserialize, Serialize};
 use smol_str::{SmolStr, ToSmolStr};
@@ -29,9 +29,7 @@ pub struct RssFeed {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRssItem {
     title: String,
-    #[serde(default)]
-    guid: Option<String>,
-    pub(crate) json: String,
+    item: rss::Item,
     extra: Vec<UrlContent>,
 }
 
@@ -96,11 +94,12 @@ impl RssFeed {
                 .and_then(|pd| DateTime::<FixedOffset>::parse_from_rfc2822(pd).ok())
                 .unwrap_or(Utc::now().fixed_offset())
         });
-        let items =
-            futures::future::try_join_all(rss_items.iter().map(async |item| -> Result<_, Error> {
-                LlmRssItem::from_item(item, &self.client).await
-            }))
-            .await?;
+        let items = futures::future::try_join_all(rss_items.into_iter().map(
+            async |item| -> Result<_, Error> {
+                LlmRssItem::from_item(item.clone(), &self.client).await
+            },
+        ))
+        .await?;
         *self.cache.write().await = Some((channel, items));
         Ok(())
     }
@@ -137,9 +136,8 @@ impl Updatable for RssFeed {
 }
 
 impl LlmRssItem {
-    async fn from_item(item: &rss::Item, client: &reqwest::Client) -> Result<Self, Error> {
+    async fn from_item(item: rss::Item, client: &reqwest::Client) -> Result<Self, Error> {
         let span = info_span!("llm_rss_item.from_item");
-        let json = serde_json::to_string(item)?;
 
         async move {
             let extra =
@@ -169,8 +167,7 @@ impl LlmRssItem {
                 )
                 .trim()
                 .to_string(),
-                guid: item.guid().map(|g| g.value.clone()),
-                json,
+                item,
                 extra,
             })
         }
@@ -182,8 +179,8 @@ impl LlmRssItem {
         &self.title
     }
 
-    pub fn guid(&self) -> Option<&String> {
-        self.guid.as_ref()
+    pub fn guid(&self) -> Option<&str> {
+        self.item.guid().map(|g| g.value())
     }
 }
 
@@ -192,7 +189,10 @@ impl LlmComprehendable for LlmRssItem {
 
     fn get_message(&self) -> Vec<SharedImageOrText> {
         let mut chunks = Vec::new();
-        chunks.push(self.json.to_smolstr().into());
+        let content = serde_json::to_string(&self.item)
+            .map(SmolStr::from)
+            .unwrap_or_else(|_| self.title().to_smolstr());
+        chunks.push(content.into());
         chunks.extend(
             self.extra
                 .iter()
@@ -212,17 +212,17 @@ impl LlmComprehendable for LlmRssItem {
 
 impl Display for LlmRssItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.title)
+        write!(f, "{}", self.title())
     }
 }
 
 impl std::hash::Hash for LlmRssItem {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        if let Some(guid) = &self.guid {
+        if let Some(guid) = &self.guid() {
             guid.hash(state);
         } else {
             // effectively hashing name and url which is not guid but good enough
-            self.title.hash(state);
+            self.title().hash(state);
         }
     }
 }

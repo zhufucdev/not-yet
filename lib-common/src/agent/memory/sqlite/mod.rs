@@ -6,12 +6,10 @@ use std::{
 
 use async_stream::try_stream;
 use futures::Stream;
-use sea_orm::{
-    ColumnTrait, Database, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QueryOrder,
-    Related,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Related};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
+use tracing::{Instrument, Level, event, info_span};
 
 use crate::{
     agent::memory::{
@@ -106,13 +104,18 @@ where
             for (decision, material) in query
                 .all(&self.db)
                 .await? {
-                let fp = self.material_dir.join(&material.unwrap().shasum);
-                let bin = tokio::fs::read(fp).await?;
-                let material = rmp_serde::from_slice(&bin)?;
+                let shasum = material.unwrap().shasum;
+                let fp = self.material_dir.join(&shasum);
+                let material: Result<Self::Material, Self::Error> = async {
+                    let bin = tokio::fs::read(fp).await.inspect_err(|err| event!(Level::ERROR, "fs read: {err}"))?;
+                    Ok(rmp_serde::from_slice(&bin).inspect_err(|err| event!(Level::ERROR, "deserialization: {err}"))?)
+                }
+                .instrument(info_span!("sqlite_decision_mem", file = ?shasum))
+                .await;
                 yield Decision {
                     time: decision.time,
                     is_truthy: decision.is_truthy,
-                    material
+                    material: material?,
                 };
             }
         }
