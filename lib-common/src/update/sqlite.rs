@@ -3,9 +3,7 @@ use std::{
     marker::PhantomData,
 };
 
-use async_trait::async_trait;
-use sea_orm::{prelude::*, sea_query};
-use tracing::{Level, event};
+use sea_orm::{ExprTrait, prelude::*, sea_query};
 
 use crate::{source::LlmComprehendable, update::UpdatePersistence};
 
@@ -15,7 +13,6 @@ use crate::{source::LlmComprehendable, update::UpdatePersistence};
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    #[sea_orm(unique)]
     pub key: String,
     pub hash: i64,
 }
@@ -75,14 +72,11 @@ where
         let mut hasher = DefaultHasher::new();
         current.hash(&mut hasher);
         let hash = hasher.finish();
-        let record = Entity::find_by_key(&self.key).one(&self.db).await?;
-        if current.is_none() {
-            Ok(record.is_none())
-        } else if record.is_none() {
-            return Ok(false);
-        } else {
-            Ok(record.unwrap().hash as u64 == hash)
-        }
+        let record = Entity::find()
+            .filter(Column::Key.eq(&self.key).and(Column::Hash.eq(hash)))
+            .one(&self.db)
+            .await?;
+        Ok(record.is_some() == current.is_some()) // comparison delegated to SQLite
     }
 }
 
