@@ -121,7 +121,10 @@ where
                 .await
                 .map_err(GetTruthValueError::Model)?;
             let req = DialogRequest {
-                tools: vec![],
+                extra: gemma4::ExtraReqParams {
+                    tools: vec![],
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let res = runner

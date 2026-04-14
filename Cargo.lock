@@ -2659,6 +2659,7 @@ dependencies = [
  "pin-project-lite",
  "quick-xml 0.39.2",
  "rand 0.10.0",
+ "regex",
  "reqwest 0.13.2",
  "rmp-serde",
  "rss",

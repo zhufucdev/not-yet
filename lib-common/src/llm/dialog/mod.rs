@@ -7,6 +7,7 @@ use llama_runner::{
 use tokio::sync::RwLock;
 
 pub mod gemma4;
+mod parse;
 
 pub struct MultiTurnDialog<Turn, History> {
     turns: Vec<Turn>,
@@ -14,13 +15,13 @@ pub struct MultiTurnDialog<Turn, History> {
 }
 
 #[derive(Debug, Clone)]
-pub struct DialogRequest<M> {
+pub struct DialogRequest<M, E> {
     pub message: M,
     pub sampling: SimpleSamplingParams,
     pub llguidance: Option<LlguidanceSamplingParams>,
     pub max_seq: usize,
     pub prefill: Option<String>,
-    pub tools: Vec<Tool>,
+    pub extra: E,
 }
 
 pub trait MultiTurnDialogEnabled<'d, Tmpl> {
@@ -28,10 +29,11 @@ pub trait MultiTurnDialogEnabled<'d, Tmpl> {
     type Turn;
     type Response;
     type History;
+    type ExtraReq;
 
     async fn get_dialog_continued(
         self: Arc<Self>,
-        req: &'d DialogRequest<Self::Turn>,
+        req: &'d DialogRequest<Self::Turn, Self::ExtraReq>,
         dialog: &'d mut MultiTurnDialog<Self::Turn, Self::History>,
     ) -> Result<Self::Response, Self::Error>;
 }
@@ -59,7 +61,7 @@ impl<Turn, History: Default> Default for MultiTurnDialog<Turn, History> {
     }
 }
 
-impl<M: Default> Default for DialogRequest<M> {
+impl<M: Default, E: Default> Default for DialogRequest<M, E> {
     fn default() -> Self {
         Self {
             message: Default::default(),
@@ -67,7 +69,7 @@ impl<M: Default> Default for DialogRequest<M> {
             llguidance: None,
             max_seq: usize::MAX,
             prefill: None,
-            tools: vec![],
+            extra: Default::default(),
         }
     }
 }
