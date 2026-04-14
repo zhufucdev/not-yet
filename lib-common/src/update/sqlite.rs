@@ -58,11 +58,6 @@ where
 
         let key = self.key.clone();
         Entity::insert(ActiveModel::builder().set_hash(hash as i64).set_key(key))
-            .on_conflict(
-                sea_query::OnConflict::column(Column::Key)
-                    .update_column(Column::Hash)
-                    .to_owned(),
-            )
             .exec(&self.db)
             .await?;
         Ok(())
@@ -73,7 +68,7 @@ where
         current.hash(&mut hasher);
         let hash = hasher.finish();
         let record = Entity::find()
-            .filter(Column::Key.eq(&self.key).and(Column::Hash.eq(hash)))
+            .filter(Column::Key.eq(&self.key).and(Column::Hash.eq(hash as i64)))
             .one(&self.db)
             .await?;
         Ok(record.is_some() == current.is_some()) // comparison delegated to SQLite
