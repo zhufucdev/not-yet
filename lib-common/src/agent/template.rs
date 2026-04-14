@@ -98,15 +98,3 @@ impl<'i> Into<ImageOrText<'i>> for &'i SharedImageOrText {
         }
     }
 }
-
-pub trait AsBorrowedMessages {
-    fn as_ref_msg<'s>(&'s self) -> Vec<(MessageRole, ImageOrText<'s>)>;
-}
-
-impl AsBorrowedMessages for [(MessageRole, SharedImageOrText)] {
-    fn as_ref_msg<'s>(&'s self) -> Vec<(MessageRole, ImageOrText<'s>)> {
-        self.iter()
-            .map(|m| (m.0.clone(), (&m.1).into()))
-            .collect::<Vec<_>>()
-    }
-}

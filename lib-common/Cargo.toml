@@ -38,6 +38,9 @@ pin-project-lite = "0.2.17"
 serde_with = "3.18.0"
 humantime-serde = "1.1.1"
 trait-variant.workspace = true
+minijinja = "2.19"
+minijinja-contrib = { version = "2.19", features = ["pycompat"] }
+llama-cpp-2 = "0.1"
 
 [features]
 cuda = ["llama-runner/cuda"]

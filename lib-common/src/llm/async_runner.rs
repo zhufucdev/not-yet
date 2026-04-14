@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use async_stream::try_stream;
 use futures::{Stream, TryStreamExt};
@@ -7,7 +7,7 @@ use llama_runner::{
     template::ChatTemplate,
 };
 
-use crate::{agent::template::AsBorrowedMessages, llm::SharedImageOrText};
+use crate::llm::{AsBorrowedMessages, SharedImageOrText};
 
 pub trait RunnerAsyncExt<Tmpl: ChatTemplate> {
     fn stream_vlm_response_async(
@@ -23,8 +23,8 @@ pub trait RunnerAsyncExt<Tmpl: ChatTemplate> {
 
 impl<T, Tmpl> RunnerAsyncExt<Tmpl> for T
 where
-    for<'r, 'req> T: VisionLmRunner<'r, 'req> + 'static,
-    Tmpl: ChatTemplate + Send + 'static,
+    for<'r, 'req> T: VisionLmRunner<'r, 'req, Tmpl> + 'static,
+    Tmpl: ChatTemplate + Clone + 'static,
     Tmpl::Error: Send,
 {
     fn stream_vlm_response_async(
@@ -33,17 +33,17 @@ where
     ) -> impl Stream<Item = Result<String, GenericRunnerError<Tmpl::Error>>> {
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let task = {
-            let this: UnsafeBox<Arc<T>> = UnsafeBox(self.clone());
+            let this = UnsafeBox(self.clone());
+            let req = UnsafeBox(req);
             tokio::spawn(async move {
-                let mut iter =
-                    UnsafeBox(this.as_ref().stream_vlm_response(GenericVisionLmRequest {
-                        messages: req.messages.as_ref_msg(),
-                        sampling: req.sampling,
-                        llguidance: req.llguidance,
-                        max_seq: req.max_seq,
-                        prefill: req.prefill,
-                        tmpl: req.tmpl,
-                    }));
+                let mut iter = UnsafeBox(this.stream_vlm_response(GenericVisionLmRequest {
+                    messages: req.messages.as_ref_msg(),
+                    sampling: req.sampling.clone(),
+                    llguidance: req.llguidance.clone(),
+                    max_seq: req.max_seq,
+                    prefill: req.prefill.clone(),
+                    tmpl: req.tmpl.clone(),
+                }));
 
                 while let Some(result) = iter.as_mut().next() {
                     if let Err(_) = tx.send(result).await {
@@ -80,8 +80,10 @@ impl<T> AsMut<T> for UnsafeBox<T> {
     }
 }
 
-impl<T> AsRef<T> for UnsafeBox<T> {
-    fn as_ref(&self) -> &T {
+impl<T> Deref for UnsafeBox<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }

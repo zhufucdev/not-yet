@@ -29,6 +29,8 @@ pub struct RssFeed {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRssItem {
     title: String,
+    #[serde(default)]
+    guid: Option<String>,
     pub(crate) json: String,
     extra: Vec<UrlContent>,
 }
@@ -86,6 +88,22 @@ impl RssFeed {
     pub fn url(&self) -> &str {
         self.url.as_str()
     }
+
+    pub(crate) async fn update_from_channel(&self, channel: Channel) -> Result<(), Error> {
+        let mut rss_items = channel.items().iter().collect::<Vec<_>>();
+        rss_items.sort_by_key(|item| {
+            item.pub_date()
+                .and_then(|pd| DateTime::<FixedOffset>::parse_from_rfc2822(pd).ok())
+                .unwrap_or(Utc::now().fixed_offset())
+        });
+        let items =
+            futures::future::try_join_all(rss_items.iter().map(async |item| -> Result<_, Error> {
+                LlmRssItem::from_item(item, &self.client).await
+            }))
+            .await?;
+        *self.cache.write().await = Some((channel, items));
+        Ok(())
+    }
 }
 
 impl Feed for RssFeed {
@@ -114,20 +132,7 @@ impl Updatable for RssFeed {
 
     async fn update(&self) -> Result<(), Self::Error> {
         let channel = self.get_rss_channel().await?;
-        let mut rss_items = channel.items().iter().collect::<Vec<_>>();
-        rss_items.sort_by_key(|item| {
-            item.pub_date()
-                .and_then(|pd| DateTime::<FixedOffset>::parse_from_rfc2822(pd).ok())
-                .unwrap_or(Utc::now().fixed_offset())
-        });
-        let items = futures::future::try_join_all(rss_items.iter().map(
-            async |item| -> Result<Self::Item, Self::Error> {
-                LlmRssItem::from_item(item, &self.client).await
-            },
-        ))
-        .await?;
-        *self.cache.write().await = Some((channel, items));
-        Ok(())
+        self.update_from_channel(channel).await
     }
 }
 
@@ -164,12 +169,21 @@ impl LlmRssItem {
                 )
                 .trim()
                 .to_string(),
+                guid: item.guid().map(|g| g.value.clone()),
                 json,
                 extra,
             })
         }
         .instrument(span)
         .await
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn guid(&self) -> Option<&String> {
+        self.guid.as_ref()
     }
 }
 
@@ -204,7 +218,12 @@ impl Display for LlmRssItem {
 
 impl std::hash::Hash for LlmRssItem {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.title.hash(state); // effectively hashing name and url which is guid
+        if let Some(guid) = &self.guid {
+            guid.hash(state);
+        } else {
+            // effectively hashing name and url which is not guid but good enough
+            self.title.hash(state);
+        }
     }
 }
 
