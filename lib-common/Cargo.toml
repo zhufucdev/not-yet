@@ -42,6 +42,8 @@ minijinja = "2.19"
 minijinja-contrib = { version = "2.19", features = ["pycompat"] }
 llama-cpp-2 = "0.1"
 regex = "1.12.3"
+rmcp = "1.4"
+schemars = "*"
 
 [features]
 cuda = ["llama-runner/cuda"]

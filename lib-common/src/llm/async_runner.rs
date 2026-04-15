@@ -11,12 +11,12 @@ use crate::llm::{AsBorrowedMessages, SharedImageOrText};
 
 pub trait RunnerAsyncExt<Tmpl: ChatTemplate> {
     fn stream_vlm_response_async(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         req: GenericRunnerRequest<SharedImageOrText, Tmpl>,
     ) -> impl Stream<Item = Result<String, GenericRunnerError<Tmpl::Error>>>;
 
     async fn get_vlm_response_async(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         req: GenericRunnerRequest<SharedImageOrText, Tmpl>,
     ) -> Result<String, GenericRunnerError<Tmpl::Error>>;
 }
@@ -28,7 +28,7 @@ where
     Tmpl::Error: Send,
 {
     fn stream_vlm_response_async(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         req: GenericRunnerRequest<SharedImageOrText, Tmpl>,
     ) -> impl Stream<Item = Result<String, GenericRunnerError<Tmpl::Error>>> {
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
@@ -61,7 +61,7 @@ where
     }
 
     async fn get_vlm_response_async(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         req: GenericRunnerRequest<SharedImageOrText, Tmpl>,
     ) -> Result<String, GenericRunnerError<Tmpl::Error>>
     where

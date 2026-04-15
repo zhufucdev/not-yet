@@ -1,10 +1,6 @@
 use std::{cell::RefCell, sync::Arc};
 
-use llama_runner::{
-    mcp::model::Tool,
-    sample::{LlguidanceSamplingParams, SimpleSamplingParams},
-};
-use tokio::sync::RwLock;
+use llama_runner::sample::{LlguidanceSamplingParams, SimpleSamplingParams};
 
 pub mod gemma4;
 mod parse;
@@ -31,8 +27,9 @@ pub trait MultiTurnDialogEnabled<'d, Tmpl> {
     type History;
     type ExtraReq;
 
+    #[allow(async_fn_in_trait)]
     async fn get_dialog_continued(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         req: &'d DialogRequest<Self::Turn, Self::ExtraReq>,
         dialog: &'d mut MultiTurnDialog<Self::Turn, Self::History>,
     ) -> Result<Self::Response, Self::Error>;
