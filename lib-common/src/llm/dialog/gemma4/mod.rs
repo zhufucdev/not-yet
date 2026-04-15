@@ -7,6 +7,7 @@ mod test;
 mod tool;
 mod turn;
 
+pub use assistant::AssistantResponse;
 pub use req::DialogRequest;
 pub use template::DialogTemplate;
 pub use tool::{ToolCall, ToolResponse};
