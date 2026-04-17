@@ -11,7 +11,7 @@ use tracing::{Instrument, Level, event, info_span};
 use reqwest::header::{HeaderMap, HeaderName};
 
 use crate::{
-    agent::memory::sqlite::material,
+    agent::memory::decision::material,
     llm::SharedImageOrText,
     source::{
         DefaultMetadata, Feed, LlmComprehendable,

@@ -7,15 +7,12 @@ use sea_orm::{ConnectionTrait, Database, Schema};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    agent::memory::{
-        Decision, DecisionMemory,
-        sqlite::{SqliteDecisionMemory, error::CreateDecisionMemoryError},
+    agent::memory::decision::{
+        self, CreateDecisionMemoryError, Decision, DecisionMemory, SqliteDecisionMemory, material,
     },
     llm::SharedImageOrText,
     source::LlmComprehendable,
 };
-
-use super::{decision, material};
 
 // ---------------------------------------------------------------------------
 // Test helpers

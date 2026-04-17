@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use llama_runner::{ImageOrText, MessageRole};
+use llama_runner::ImageOrText;
 use quick_xml::events::Event;
 
 use crate::{agent::error::TemplateExpansionError, llm::SharedImageOrText};
@@ -18,7 +18,7 @@ pub fn expand_prompt(
     template: impl AsRef<str>,
     literals: &HashMap<String, String>,
     macros: &PromptMacros,
-) -> Result<Vec<(MessageRole, SharedImageOrText)>, TemplateExpansionError> {
+) -> Result<Vec<SharedImageOrText>, TemplateExpansionError> {
     let macro_expand = move |name: &str| {
         if !name.starts_with("{") || !name.ends_with("}") {
             return Err(TemplateExpansionError::InvalidMacro(name.to_string()));
@@ -43,7 +43,6 @@ pub fn expand_prompt(
     let encoding = reader.decoder().encoding();
 
     let mut tag_hierarchy = Vec::new();
-    let role = MessageRole::User;
     loop {
         match reader.read_event()? {
             Event::Start(_) if tag_hierarchy.first().is_some_and(|t| *t != TagKind::Prompt) => {
@@ -71,16 +70,13 @@ pub fn expand_prompt(
             }
             Event::Text(byte_text) if tag_hierarchy.last() == Some(&TagKind::Paragraph) => {
                 let text = encoding.decode(&byte_text).0;
-                messages.push((
-                    role.clone(),
-                    SharedImageOrText::Text(literal_replace(text.trim()).into()),
-                ));
+                messages.push(SharedImageOrText::Text(literal_replace(text.trim()).into()));
             }
             Event::Text(byte_text) if tag_hierarchy.last() == Some(&TagKind::Expand) => {
                 let text = encoding.decode(&byte_text).0;
                 let expansions = macro_expand(text.as_ref())?;
                 for expansion in expansions {
-                    messages.push((role.clone(), expansion));
+                    messages.push(expansion);
                 }
             }
             Event::Eof => break,

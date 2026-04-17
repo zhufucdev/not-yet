@@ -10,7 +10,7 @@ pub mod utils;
 
 pub use rss::{LlmRssItem, RssFeed};
 
-use crate::{agent::memory::sqlite::material, llm::SharedImageOrText, update::Updatable};
+use crate::{agent::memory::decision::material, llm::SharedImageOrText, update::Updatable};
 
 pub trait LlmComprehendable {
     const KIND: Option<material::Kind> = None;

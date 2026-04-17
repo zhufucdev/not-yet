@@ -92,7 +92,9 @@ async fn test_hacker_news() {
     assert!(updates[40].0.is_none());
     assert_eq!(
         updates[41].0.as_ref().map(|i| i.title()),
-        Some("Lean proved this program correct; then I found a bug https://kirancodes.me/posts/log-who-watches-the-watchers.html")
+        Some(
+            "Lean proved this program correct; then I found a bug https://kirancodes.me/posts/log-who-watches-the-watchers.html"
+        )
     )
 }
 

@@ -1,16 +1,20 @@
 use std::sync::Arc;
 
+use crate::serde_utils::DynImageConverter;
 use llama_runner::{ImageOrText, MessageRole};
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use smol_str::{SmolStr, ToSmolStr};
 
 pub mod async_runner;
-pub mod owned;
 pub mod dialog;
+pub mod owned;
 pub mod timeout;
 
-#[derive(Clone, Debug)]
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SharedImageOrText {
-    Image(Arc<image::DynamicImage>),
+    Image(#[serde_as(as = "Arc<DynImageConverter>")] Arc<image::DynamicImage>),
     Text(SmolStr),
 }
 

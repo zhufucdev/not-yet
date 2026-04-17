@@ -3,8 +3,9 @@ use std::collections::BinaryHeap;
 use async_stream::try_stream;
 use futures::Stream;
 
+use super::TimeOrderedDecisionMemory;
 use crate::{
-    agent::memory::{Decision, DecisionMemory, TimeOrderedDecisionMemory},
+    agent::memory::decision::{Decision, DecisionMemory},
     source::LlmComprehendable,
 };
 

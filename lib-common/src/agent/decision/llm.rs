@@ -1,14 +1,16 @@
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
 
 use crate::{
     agent::{
         error::GetTruthValueError,
-        memory::{Decision, DecisionMemory},
+        memory::{
+            decision::{Decision, DecisionMemory},
+            dialog::DialogMemory,
+        },
         template::{self, PromptMacros},
     },
     llm::{
         self, SharedImageOrText,
-        async_runner::RunnerAsyncExt,
         dialog::{DialogRequest, MultiTurnDialog, MultiTurnDialogEnabled, gemma4},
     },
     secure,
@@ -16,44 +18,51 @@ use crate::{
 };
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, future};
-use llama_runner::{
-    Gemma4ApplicableChatTemplate, GenericRunnerRequest, VisionLmRunner,
-    mcp::{Qwen3ChatTemplate, error::JinjaTemplateError},
-};
+use llama_runner::VisionLmRunner;
 use smol_str::ToSmolStr;
 use tokio::{pin, sync::RwLock};
 use tracing::{Instrument, Level, debug_span, event, info_span};
 
-pub struct LlmConditionMatcher<Model, Memory> {
+pub struct LlmConditionMatcher<Model, DecisionMemory, DialogMemory> {
     model: Model,
     condition: String,
-    memory: Arc<RwLock<Memory>>,
+    decmem: Arc<RwLock<DecisionMemory>>,
+    diamem: Arc<RwLock<DialogMemory>>,
 }
 
-impl<Model, Memory> LlmConditionMatcher<Model, Memory> {
-    pub fn new(model: Model, condition: impl ToString, memory: Memory) -> Self {
+impl<Model, DecisionMemory, DialogMemory> LlmConditionMatcher<Model, DecisionMemory, DialogMemory> {
+    pub fn new(
+        model: Model,
+        condition: impl ToString,
+        decision_memory: DecisionMemory,
+        dialog_memory: DialogMemory,
+    ) -> Self {
         Self {
             model,
             condition: condition.to_string(),
-            memory: Arc::new(RwLock::new(memory)),
+            decmem: Arc::new(RwLock::new(decision_memory)),
+            diamem: Arc::new(RwLock::new(dialog_memory)),
         }
     }
 }
 
-impl<Model, Runner, Update, Memory> super::Decider for LlmConditionMatcher<Model, Memory>
+impl<Model, Runner, Update, DecMem, DiaMem> super::Decider
+    for LlmConditionMatcher<Model, DecMem, DiaMem>
 where
     Model: llm::Model<Runner = Runner> + Sync + Send,
     for<'se, 'req> Runner:
         VisionLmRunner<'se, 'req, gemma4::DialogTemplate> + Send + Sync + 'static,
     Update: LlmComprehendable + Send + Sync,
-    Memory: DecisionMemory<Material = Update> + Send + Sync,
-    Memory::Error: Send,
-    Memory::Material: Send + Sync,
+    DecMem: DecisionMemory<Material = Update> + Send + Sync,
+    DecMem::Error: Send,
+    DecMem::Material: Send + Sync,
+    DiaMem: DialogMemory<Dialog = gemma4::Dialog>,
+    DiaMem::Error: Debug,
 {
     type Material = Update;
     type Error = GetTruthValueError<
         Model::Error,
-        Memory::Error,
+        DecMem::Error,
         <Runner as MultiTurnDialogEnabled<'static, gemma4::DialogTemplate>>::Error,
     >;
 
@@ -61,7 +70,7 @@ where
         let inference_span = info_span!("condition_matcher.get_truth_value.inference");
         let response: Result<String, Self::Error> = async {
             let messages = {
-                let mem = self.memory.read().await;
+                let mem = self.decmem.read().await;
                 let stream = mem
                     .iter_newest_first()
                     .filter(|r| {
@@ -114,26 +123,23 @@ where
                     .unwrap()
                 }
             };
-            let mut dialog = MultiTurnDialog::new();
             let runner = self
                 .model
                 .get_runner()
                 .await
                 .map_err(GetTruthValueError::Model)?;
-            let req = DialogRequest {
-                extra: gemma4::ExtraReqParams {
-                    tools: vec![],
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
+            let req = gemma4::DialogRequest::new(gemma4::DialogTurn::User(messages));
+            let mut dialog = MultiTurnDialog::new();
             let res = runner
                 .get_dialog_continued(&req, &mut dialog)
                 .await
                 .map_err(GetTruthValueError::Runner)?;
-            event!(Level::DEBUG, "full response from LLM: \n{:#?}", res);
+            event!(Level::TRACE, "full response from LLM: \n{:#?}", res);
+            if let Err(err) = self.diamem.write().await.update(&dialog).await {
+                event!(Level::ERROR, "failed to update dialog memory: {:?}", err);
+            }
 
-            Ok("".into())
+            Ok(res.content)
         }
         .instrument(inference_span)
         .await;
@@ -158,7 +164,7 @@ where
             );
             let truthy = response.contains("Yes") || response.contains("yes");
             event!(Level::INFO, "remember this update as {}", truthy);
-            self.memory
+            self.decmem
                 .write()
                 .await
                 .push(Decision {
@@ -177,12 +183,15 @@ where
 
 #[cfg(test)]
 mod test {
-    use llama_runner::Gemma3VisionRunner;
+    use llama_runner::Gemma4VisionRunner;
     use serde_json::json;
     use tracing_test::traced_test;
 
     use crate::{
-        agent::{decision::Decider, memory::debug::DebugDecisionMemory},
+        agent::{
+            decision::Decider,
+            memory::{decision::debug::DebugDecisionMemory, dialog::debug::DebugDialogMemory},
+        },
         llm::owned::OwnedModel,
         source::DefaultUpdate,
     };
@@ -193,9 +202,10 @@ mod test {
     #[traced_test]
     async fn test_condition_matcher() {
         let matcher = LlmConditionMatcher::new(
-            OwnedModel::new(Gemma3VisionRunner::default().await.unwrap()),
+            OwnedModel::new(Gemma4VisionRunner::default().await.unwrap()),
             "there has been at least 2 chapters since last time or ever",
-            DebugDecisionMemory::<DefaultUpdate>::new(),
+            DebugDecisionMemory::new(),
+            DebugDialogMemory::new(),
         );
         let ch1 = json!({
             "title": "Ch. 1: The New Girl",

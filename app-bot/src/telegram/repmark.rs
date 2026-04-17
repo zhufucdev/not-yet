@@ -10,7 +10,8 @@ where
     V: Into<String>,
 {
     InlineKeyboardMarkup::new(rows.into_iter().map(|cols| {
-        cols.into_iter()
-            .map(|(k, v)| InlineKeyboardButton::new(k, InlineKeyboardButtonKind::CallbackData(v.into())))
+        cols.into_iter().map(|(k, v)| {
+            InlineKeyboardButton::new(k, InlineKeyboardButtonKind::CallbackData(v.into()))
+        })
     }))
 }

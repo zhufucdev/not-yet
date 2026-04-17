@@ -1,4 +1,4 @@
-use std::{cell::RefCell, sync::Arc};
+use std::cell::RefCell;
 
 use llama_cpp_2::model::{LlamaChatTemplate, LlamaModel};
 use llama_runner::{
@@ -15,7 +15,7 @@ use crate::llm::dialog::gemma4::{DialogTurn, ROLE_TOOL};
 pub struct DialogTemplate {
     env: minijinja::Environment<'static>,
     message: DialogTurn,
-    history: Arc<RefCell<Vec<minijinja::Value>>>,
+    history: RefCell<Vec<minijinja::Value>>,
 }
 
 impl DialogTemplate {
@@ -23,7 +23,7 @@ impl DialogTemplate {
         tools: impl IntoIterator<Item = Gemma4Tool>,
         enable_thinking: bool,
         message: DialogTurn,
-        history: Arc<RefCell<Vec<minijinja::Value>>>,
+        history: impl IntoIterator<Item = minijinja::Value>,
     ) -> Self {
         let mut env = minijinja::Environment::new();
         minijinja_contrib::add_to_environment(&mut env);
@@ -38,7 +38,7 @@ impl DialogTemplate {
         Self {
             env,
             message,
-            history,
+            history: RefCell::new(history.into_iter().collect()),
         }
     }
 }
@@ -90,11 +90,9 @@ impl ChatTemplate for DialogTemplate {
                     }
                 }
             }));
-        let msg_guard = self.history.borrow();
-        let messages = msg_guard.as_slice();
 
         let render = template
-            .render(context! { messages => messages, add_generation_prompt => true })
+            .render(context! { messages => self.history.borrow().as_slice(), add_generation_prompt => true })
             .map_err(JinjaTemplateError::Render)?;
         Ok(render)
     }

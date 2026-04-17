@@ -1,31 +1,38 @@
+use chrono::{DateTime, Utc};
+use sea_orm::entity::prelude::*;
 use std::{
     fs,
     marker::PhantomData,
     path::{Path, PathBuf},
 };
+use thiserror::Error;
 
 use async_stream::try_stream;
 use futures::Stream;
-use sea_orm::{
-    ColumnTrait, Database, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QueryOrder,
-    Related,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
-use crate::{
-    agent::memory::{
-        Decision,
-        sqlite::error::{CreateDecisionMemoryError, DecisionMemoryError},
-    },
-    source::LlmComprehendable,
-};
+use crate::{agent::memory::decision::Decision, source::LlmComprehendable};
 
-pub mod decision;
-pub mod error;
-pub mod material;
 #[cfg(test)]
 mod test;
+
+#[sea_orm::model]
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+#[sea_orm(table_name = "decision_mem")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub id: i32,
+    pub agent_id: Option<i32>,
+    pub is_truthy: bool,
+    pub time: DateTime<Utc>,
+    pub material_id: i32,
+    #[sea_orm(belongs_to, from = "material_id", to = "id")]
+    pub material: HasOne<super::material::Entity>,
+}
+
+impl ActiveModelBehavior for ActiveModel {}
 
 pub struct SqliteDecisionMemory<U> {
     db: DatabaseConnection,
@@ -74,12 +81,12 @@ where
                 Ok(())
             }(),
             async || -> Result<(), Self::Error> {
-                decision::ActiveModel::builder()
+                ActiveModel::builder()
                     .set_agent_id(self.agent_id)
                     .set_time(decision.time)
                     .set_is_truthy(decision.is_truthy)
                     .set_material(
-                        material::ActiveModel::builder()
+                        super::material::ActiveModel::builder()
                             .set_kind(Self::Material::KIND.unwrap())
                             .set_shasum(shasum),
                     )
@@ -95,13 +102,13 @@ where
     fn iter_newest_first<'s>(
         &'s self,
     ) -> impl Stream<Item = Result<impl AsRef<Decision<Self::Material>>, Self::Error>> {
-        let mut query = decision::Entity::find().find_also_related(material::Entity);
+        let mut query = Entity::find().find_also_related(super::material::Entity);
         if let Some(agent_id) = self.agent_id {
-            query = query.filter(decision::Column::AgentId.eq(agent_id));
+            query = query.filter(Column::AgentId.eq(agent_id));
         }
         query = query
-            .filter(material::Column::Kind.eq(Self::Material::KIND.unwrap()))
-            .order_by_desc(decision::Column::Time);
+            .filter(super::material::Column::Kind.eq(Self::Material::KIND.unwrap()))
+            .order_by_desc(Column::Time);
         try_stream! {
             for (decision, material) in query
                 .all(&self.db)
@@ -119,16 +126,38 @@ where
     }
 
     async fn clear(&mut self) -> Result<(), Self::Error> {
-        let ids = material::Entity::find_related()
-            .filter(material::Column::Kind.eq(Self::Material::KIND.unwrap()))
+        let ids = super::material::Entity::find_related()
+            .filter(super::material::Column::Kind.eq(Self::Material::KIND.unwrap()))
             .all(&self.db)
             .await?
             .into_iter()
             .map(|d| d.id);
-        decision::Entity::delete_many()
+        Entity::delete_many()
             .filter_by_ids(ids)
             .exec(&self.db)
             .await?;
         Ok(())
     }
+}
+
+#[derive(Debug, Error)]
+pub enum DecisionMemoryError {
+    #[error("db: {0}")]
+    Db(#[from] sea_orm::DbErr),
+    #[error("serialization: {0}")]
+    Serialization(#[from] rmp_serde::encode::Error),
+    #[error("deserialization: {0}")]
+    Deserialization(#[from] rmp_serde::decode::Error),
+    #[error("file IO: {0}")]
+    FileIo(#[from] std::io::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum CreateDecisionMemoryError {
+    #[error("unsupported material type")]
+    UnsupportedMaterialType,
+    #[error("file io: {0}")]
+    FileIo(#[from] std::io::Error),
+    #[error("db: {0}")]
+    Db(#[from] sea_orm::DbErr),
 }

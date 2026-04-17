@@ -13,7 +13,7 @@ pub struct Args {
     /// environment variable if present
     #[clap(short, long)]
     pub bot_token: Option<String>,
-    
+
     /// Path to the configuration and data files,
     /// defaults to $XDG_CONFIG/notyet, where for the former
     /// the program recognizes config.toml

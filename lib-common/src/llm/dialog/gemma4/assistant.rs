@@ -1,9 +1,9 @@
 use llama_runner::MessageRole;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::llm::dialog::{gemma4::tool::ToolCall, parse};
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssistantResponse {
     pub reasoning: Option<String>,
     pub content: String,

@@ -1,13 +1,16 @@
-use std::{cell::RefCell, sync::Arc};
+use std::sync::Arc;
 
 use llama_runner::sample::{LlguidanceSamplingParams, SimpleSamplingParams};
+use serde::{Deserialize, Serialize};
 
 pub mod gemma4;
 mod parse;
+pub mod toolcall;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiTurnDialog<Turn, History> {
     turns: Vec<Turn>,
-    history: Arc<RefCell<History>>,
+    history: History,
 }
 
 pub trait DialogRequest<Msg> {
@@ -95,13 +98,15 @@ impl<Turn, History: Default> MultiTurnDialog<Turn, History> {
             history: Default::default(),
         }
     }
+}
 
+impl<Turn, History> MultiTurnDialog<Turn, History> {
     pub fn turns(&self) -> &[Turn] {
         &self.turns
     }
 
-    pub fn history(&self) -> Arc<RefCell<History>> {
-        self.history.clone()
+    pub fn history(&self) -> &History {
+        &self.history
     }
 }
 

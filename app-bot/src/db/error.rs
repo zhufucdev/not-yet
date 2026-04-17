@@ -9,5 +9,5 @@ pub enum ParseHeaderError {
     #[error("invalid header: {0}")]
     InvalidPair(String),
     #[error("HTTP IO error: {0}")]
-    Io(#[from] reqwest::Error)
+    Io(#[from] reqwest::Error),
 }

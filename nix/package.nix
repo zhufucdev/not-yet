@@ -17,8 +17,8 @@ let
   effectiveStdenv = if cudaSupport then cudaPackages.backendStdenv else stdenv;
 
   # Use crane's built-in source cleaning
-  promptOrCargo =
-    path: type: (builtins.match ".*prompt/.*$" path != null) || (craneLib.filterCargoSources path type);
+  xmlOrCargoSource =
+    path: type: (builtins.match ".*/.*\\.xml$" path != null) || (craneLib.filterCargoSources path type);
 
   cudaBuildInputs = with cudaPackages; [
     cuda_cccl
@@ -83,7 +83,7 @@ craneLib.buildPackage (
     inherit version;
     src = lib.sources.cleanSourceWith {
       src = ../.;
-      filter = promptOrCargo;
+      filter = xmlOrCargoSource;
       name = "source";
     };
     APP_VERSION = version;

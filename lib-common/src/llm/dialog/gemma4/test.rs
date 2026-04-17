@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use crate::llm::dialog::{
     DialogRequest as _, MultiTurnDialog, MultiTurnDialogEnabled, WithMaxSeq,
-    gemma4::{DialogRequest, DialogTurn, ToolResponse, assistant::AssistantResponse},
+    gemma4::{
+        DialogRequest, DialogTurn, ToolResponse, assistant::AssistantResponse, tool::ToolResult,
+    },
 };
 
 use llama_runner::Gemma4VisionRunner;
@@ -47,11 +49,6 @@ async fn tool_use() {
 
     assert_eq!(dialog.turns().len(), 2);
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    enum ToolResult<'s> {
-        Success(&'s str),
-        Failure(&'s str),
-    }
     req.set_message(DialogTurn::ToolResponses(vec![ToolResponse::new(
         "update_fav_number",
         ToolResult::Failure(

@@ -1,19 +1,23 @@
 use std::sync::Arc;
 
 use llama_runner::{GenericRunnerRequest, MessageRole, VisionLmRunner};
+use serde::{Deserialize, Serialize};
 
 use crate::llm::{
     SharedImageOrText,
     async_runner::RunnerAsyncExt,
     dialog::{
-        DialogRequest as _, MultiTurnDialog, MultiTurnDialogEnabled, WithLlguidance, WithMaxSeq, WithPrefill, WithSampling, gemma4::{
+        DialogRequest as _, MultiTurnDialog, MultiTurnDialogEnabled, WithLlguidance, WithMaxSeq,
+        WithPrefill, WithSampling,
+        gemma4::{
             DialogRequest, ROLE_TOOL, assistant::AssistantResponse, error::Error,
             template::DialogTemplate, tool::ToolResponse,
-        }, parse
+        },
+        parse,
     },
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DialogTurn {
     System(Vec<SharedImageOrText>),
     User(Vec<SharedImageOrText>),
@@ -58,7 +62,7 @@ where
                 .collect::<Result<Vec<_>, _>>()?,
             req.is_thinking(),
             req.get_message().clone(),
-            dialog.history(),
+            dialog.history().clone(),
         );
         let res = self
             .get_vlm_response_async(GenericRunnerRequest {
@@ -73,7 +77,7 @@ where
         dialog.turns.push(req.get_message().clone());
         let res_turn = parse::gemmma4::assistant_response(res);
         dialog.turns.push(DialogTurn::Assistant(res_turn.clone()));
-        dialog.history.borrow_mut().push((&res_turn).into());
+        dialog.history.push((&res_turn).into());
         Ok(res_turn)
     }
 }

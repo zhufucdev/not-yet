@@ -191,6 +191,7 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         .filter_command::<Command>()
                         .branch(dptree::case![Command::Start].endpoint(start)),
                 )
+                .branch(dptree::case![State::Start].endpoint(authenticate))
                 .branch(dptree::case![State::Authenticating].endpoint(authenticate))
                 .branch(dptree::case![State::ChoseFeed { kind }].endpoint(receive_rss_url))
                 .branch(
@@ -688,4 +689,8 @@ async fn receive_rss_custom_headers(
         Err(_) => todo!(),
     }
     Ok(())
+}
+
+async fn receive_feedback_msg(bot: Bot, msg: Message) -> anyhow::Result<()> {
+    let user_id = msg.from.unwrap().id.0 as UserId;
 }
