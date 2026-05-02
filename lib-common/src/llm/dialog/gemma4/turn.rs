@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use llama_runner::{GenericRunnerRequest, MessageRole, VisionLmRunner};
 use serde::{Deserialize, Serialize};
+use tracing::{Level, event};
 
 use crate::llm::{
     SharedImageOrText,
@@ -40,6 +41,7 @@ where
         req: &'d Self::Request,
         dialog: &'d mut MultiTurnDialog<Self::Turn, Self::History>,
     ) -> Result<Self::Response, Self::Error> {
+        event!(Level::DEBUG, "{req:?}");
         let new_messages = match req.get_message() {
             DialogTurn::System(msg) => msg
                 .into_iter()
@@ -70,7 +72,7 @@ where
                 messages: new_messages,
                 sampling: req.get_sampling().clone(),
                 llguidance: req.get_llguidance().cloned(),
-                max_seq: req.get_max_seq().clone(),
+                max_seq: req.get_max_seq().unwrap_or(usize::MAX),
                 prefill: req.get_prefill().cloned(),
             })
             .await?;

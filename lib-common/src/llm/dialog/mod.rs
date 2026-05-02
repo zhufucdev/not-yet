@@ -49,7 +49,7 @@ where
     fn with_max_seq(mut self, max_seq: usize) -> Self {
         todo!()
     }
-    fn get_max_seq(&self) -> usize;
+    fn get_max_seq(&self) -> Option<usize>;
 }
 
 pub trait WithPrefill
@@ -72,7 +72,7 @@ pub trait WithSimpleHyperParams {
 pub struct SimpleDialogHyperParams {
     pub sampling: SimpleSamplingParams,
     pub llguidance: Option<LlguidanceSamplingParams>,
-    pub max_seq: usize,
+    pub max_seq: Option<usize>,
     pub prefill: Option<String>,
 }
 
@@ -129,11 +129,11 @@ impl<S: WithSimpleHyperParams + Sized> WithLlguidance for S {
 
 impl<S: WithSimpleHyperParams + Sized> WithMaxSeq for S {
     fn with_max_seq(mut self, max_seq: usize) -> Self {
-        self.shp_mut().max_seq = max_seq;
+        self.shp_mut().max_seq = Some(max_seq);
         self
     }
 
-    fn get_max_seq(&self) -> usize {
+    fn get_max_seq(&self) -> Option<usize> {
         self.shp().max_seq
     }
 }

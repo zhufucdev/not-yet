@@ -27,7 +27,6 @@ async fn tool_use() {
     }
 
     let mut req = DialogRequest::new(DialogTurn::User(vec!["My fav number is 420".into()]))
-        .with_max_seq(3)
         .with_tools([Tool::new(
             "update_fav_number",
             "Change the user's favorite number",
