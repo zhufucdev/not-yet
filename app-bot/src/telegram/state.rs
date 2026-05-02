@@ -1,3 +1,4 @@
+use lib_common::agent::optimize::{Optimizer, gemma4::Gemma4Optimizer};
 use smol_str::SmolStr;
 
 use crate::db::subscription;
@@ -25,5 +26,8 @@ pub enum State {
         condition: SmolStr,
         url: SmolStr,
         kind: subscription::Kind,
+    },
+    Feedingback {
+        optimizer: Gemma4Optimizer<>
     },
 }

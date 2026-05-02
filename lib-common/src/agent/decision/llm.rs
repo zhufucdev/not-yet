@@ -52,7 +52,7 @@ where
     Model: llm::Model<Runner = Runner> + Sync + Send,
     for<'se, 'req> Runner:
         VisionLmRunner<'se, 'req, gemma4::DialogTemplate> + Send + Sync + 'static,
-    Update: LlmComprehendable + Send + Sync,
+    Update: LlmComprehendable + Send + Sync + Clone,
     DecMem: DecisionMemory<Material = Update> + Send + Sync,
     DecMem::Error: Send,
     DecMem::Material: Send + Sync,
@@ -66,7 +66,7 @@ where
         <Runner as MultiTurnDialogEnabled<'static, gemma4::DialogTemplate>>::Error,
     >;
 
-    async fn get_truth_value(&self, update: Update) -> Result<bool, Self::Error> {
+    async fn get_truth_value(&self, update: &Update) -> Result<bool, Self::Error> {
         let inference_span = info_span!("condition_matcher.get_truth_value.inference");
         let response: Result<String, Self::Error> = async {
             let messages = {
@@ -169,7 +169,7 @@ where
                 .await
                 .push(Decision {
                     time: Utc::now(),
-                    material: update,
+                    material: update.clone(),
                     is_truthy: truthy,
                 })
                 .await

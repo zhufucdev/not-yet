@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Display, sync::Arc};
 
-use futures::{future, lock::Mutex};
+use futures::future;
 use rmcp::{
     handler::server::tool::schema_for_type,
     model::{EmptyObject, Tool},
@@ -15,7 +15,7 @@ use tracing::{Level, event};
 
 use crate::{
     agent::{
-        memory::dialog::DialogMemory,
+        memory::{criteria::CriteriaMemory, dialog::DialogMemory},
         optimize::{
             ApproveOrDeny, OptimizationCallback, Optimizer, OptimizerAction, ScheduleParamters,
         },
@@ -23,17 +23,19 @@ use crate::{
     },
     llm::{
         self,
-        dialog::{DialogRequest, MultiTurnDialog, MultiTurnDialogEnabled, gemma4, toolcall},
+        dialog::{DialogRequest, MultiTurnDialogEnabled, gemma4, toolcall},
     },
 };
 
-pub struct Gemma4Optimizer<Model, DiaMem, ClarHandler, Schedule> {
+pub struct Gemma4Optimizer<Model, DiaMem, CriMem, ClarHandler, Schedule> {
     model: Model,
     dialog_memory: RwLock<DiaMem>,
+    criteria_memory: Arc<RwLock<CriMem>>,
     clarification_handler: Arc<ClarHandler>,
     schedule: Schedule,
     checked_interval: Arc<RwLock<bool>>,
     checked_buffer_size: Arc<RwLock<bool>>,
+    checked_criteria: Arc<RwLock<bool>>,
 }
 
 #[trait_variant::make(Send)]
@@ -47,7 +49,8 @@ pub trait ClarificationReqHandler {
     async fn on_request(&self, prompt: &str) -> Option<String>;
 }
 
-impl<Model, DiaMem, ClarHandler, Schedule> Gemma4Optimizer<Model, DiaMem, ClarHandler, Schedule>
+impl<Model, DiaMem, CriMem, ClarHandler, Schedule>
+    Gemma4Optimizer<Model, DiaMem, CriMem, ClarHandler, Schedule>
 where
     ClarHandler: ClarificationReqHandler,
     Schedule: ScheduleParamterAccessor,
@@ -56,25 +59,31 @@ where
     pub fn new(
         model: Model,
         dialog_memory: impl Into<DiaMem>,
+        criteria_memory: impl Into<CriMem>,
         clarification_handler: impl Into<ClarHandler>,
         schedule: impl Into<Schedule>,
     ) -> Self {
         Self {
             model,
             dialog_memory: RwLock::new(dialog_memory.into()),
+            criteria_memory: Arc::new(RwLock::new(criteria_memory.into())),
             clarification_handler: Arc::new(clarification_handler.into()),
             schedule: schedule.into(),
             checked_interval: Arc::new(RwLock::new(false)),
             checked_buffer_size: Arc::new(RwLock::new(false)),
+            checked_criteria: Arc::new(RwLock::new(false)),
         }
     }
 }
 
-impl<Model, DiaMem, ClarHandler, Schedule> Gemma4Optimizer<Model, DiaMem, ClarHandler, Schedule>
+impl<Model, DiaMem, CriMem, ClarHandler, Schedule>
+    Gemma4Optimizer<Model, DiaMem, CriMem, ClarHandler, Schedule>
 where
     Schedule: ScheduleParamterAccessor + Send + Sync + 'static,
     ClarHandler: ClarificationReqHandler + Send + Sync + 'static,
     DiaMem: Send + Sync + 'static,
+    CriMem: CriteriaMemory + Send + Sync + 'static,
+    CriMem::Error: Display,
     Model: Send + Sync + 'static,
 {
     fn get_tools_and_handlers<'a>(
@@ -99,9 +108,10 @@ where
                             .into());
                         }
                         let Some(new_value) = args["new_value"].as_u64().map(|v| v as u32) else {
-                            return Ok(
-                                gemma4::ToolResult::Failure("invalid type for `new_value`").into()
-                            );
+                            return Ok(gemma4::ToolResult::Failure(
+                                "missing or invalid parameter: new_value",
+                            )
+                            .into());
                         };
                         let (tx, mut rx) = mpsc::channel(1);
                         action
@@ -143,9 +153,9 @@ where
                     "a buffer is where polled updates are staged, discarding overflowing ones. A smaller buffer would suit rapid-changing feeds, while a bigger one preserves more details",
                     schema_for_type::<SetBufferSizeInputParams>(),
                 ),
-                gemma4::ToolHandler::new(move |args| {
-                    let action = action.clone();
+                gemma4::ToolHandler::new(|args| {
                     let checked_buffer_size = self.checked_buffer_size.clone();
+                    let action = action.clone();
                     async move {
                         if !checked_buffer_size.read().await.clone() {
                             return Ok(gemma4::ToolResult::Failure(
@@ -153,7 +163,13 @@ where
                             )
                             .into());
                         }
-                        let new_value = args["new_value"].as_u64().unwrap() as usize;
+                        let Some(new_value) = args["new_value"].as_u64().map(|it| it as usize)
+                        else {
+                            return Ok(gemma4::ToolResult::Failure(
+                                "missing or invalid parameter: new_value",
+                            )
+                            .into());
+                        };
                         let (tx, mut rx) = mpsc::channel(1);
                         action
                             .send((
@@ -163,8 +179,7 @@ where
                                 }),
                                 tx,
                             ))
-                            .await
-                            .unwrap();
+                            .await?;
                         match rx.recv().await {
                             Some(ApproveOrDeny::Approve) => {
                                 Ok(format!("the new buffer size is {new_value}").into())
@@ -183,7 +198,7 @@ where
                     "get the current buffer size",
                     schema_for_type::<EmptyObject>(),
                 ),
-                gemma4::ToolHandler::new(async |args| {
+                gemma4::ToolHandler::new(async |_| {
                     *self.checked_buffer_size.write().await = true;
                     Ok(self.schedule.get_buffer_size().await.into())
                 }),
@@ -191,18 +206,71 @@ where
             (
                 Tool::new(
                     "update_criteria",
-                    "reflections on this interaction, be it clarification on a definition, notes on user's preferences, or tips to improve judgemental accuracy in general; keep it brief and to the point",
+                    "add reflections on this interaction, be it clarification on a definition, notes on user's preferences, or tips to improve judgemental accuracy in general; keep it brief and to the point",
                     schema_for_type::<UpdateCriteriaInputParams>(),
                 ),
-                gemma4::ToolHandler::new(async |args| "".into()),
+                gemma4::ToolHandler::new(|args| {
+                    let checked_criterias = self.checked_criteria.clone();
+                    let action = action.clone();
+                    let criteria_memory = self.criteria_memory.clone();
+                    async move {
+                        if !checked_criterias.read().await.clone() {
+                            return Ok(gemma4::ToolResult::Failure(
+                                "you must check the criteria list before adding one",
+                            )
+                            .into());
+                        }
+                        let Some(content) = args["content"].as_str() else {
+                            return Ok(gemma4::ToolResult::Failure(
+                                "missing or invalid parameter: content",
+                            )
+                            .into());
+                        };
+                        let (tx, mut rx) = mpsc::channel(1);
+                        action
+                            .send((OptimizerAction::ContextPrefill(vec![content.into()]), tx))
+                            .await?;
+                        match rx.recv().await {
+                            Some(ApproveOrDeny::Approve) => {
+                                if let Err(err) = criteria_memory.write().await.add(content).await {
+                                    Ok(gemma4::ToolResult::Failure(err.to_string().as_str()).into())
+                                } else {
+                                    Ok("criterion added".into())
+                                }
+                            }
+                            Some(ApproveOrDeny::Deny { reason }) => {
+                                Ok(reject_message(reason).into())
+                            }
+                            None => Err(ToolHandlerError::ChannelClosed),
+                        }
+                    }
+                }),
             ),
             (
                 Tool::new(
-                    "recall_criterias",
+                    "recall_criteria",
                     "retrive a list of criteria previously remembered",
                     schema_for_type::<EmptyObject>(),
                 ),
-                gemma4::ToolHandler::new(async |args| "".into()),
+                gemma4::ToolHandler::new(async |_| {
+                    *self.checked_criteria.write().await = true;
+                    let criteria = self.criteria_memory.read().await;
+                    let criteria = match criteria.get().await {
+                        Err(err) => {
+                            return Ok(gemma4::ToolResult::Failure(err.to_string().as_str()).into());
+                        }
+                        Ok(criteria) => criteria,
+                    };
+                    Ok(format!(
+                        "[{}]",
+                        criteria
+                            .into_iter()
+                            .map(|c| c.as_ref().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                    .into())
+                }),
             ),
             (
                 Tool::new(
@@ -214,9 +282,10 @@ where
                     let ch = self.clarification_handler.clone();
                     async move {
                         let Some(question) = args["question"].as_str() else {
-                            return Ok(
-                                gemma4::ToolResult::Failure("invalid type for `question`").into()
-                            );
+                            return Ok(gemma4::ToolResult::Failure(
+                                "missing or invalid parameter: question",
+                            )
+                            .into());
                         };
                         if let Some(clarification) = ch.on_request(question).await {
                             Ok(clarification.into())
@@ -230,8 +299,8 @@ where
     }
 }
 
-impl<Model, Runner, DiaMem, ClarHandler, Schedule> Optimizer<gemma4::Dialog>
-    for Gemma4Optimizer<Model, DiaMem, ClarHandler, Schedule>
+impl<Model, Runner, DiaMem, CriMem, ClarHandler, Schedule> Optimizer<gemma4::Dialog>
+    for Gemma4Optimizer<Model, DiaMem, CriMem, ClarHandler, Schedule>
 where
     for<'se, 'req> Runner:
         VisionLmRunner<'se, 'req, gemma4::DialogTemplate> + Send + Sync + 'static,
@@ -242,6 +311,8 @@ where
     Schedule: ScheduleParamterAccessor + Sync + 'static,
     DiaMem: DialogMemory<Dialog = gemma4::Dialog> + Send + Sync + 'static,
     DiaMem::Error: Display,
+    CriMem: CriteriaMemory + Send + Sync + 'static,
+    CriMem::Error: Display,
 {
     type Error = Error<Model::Error>;
 
@@ -363,5 +434,11 @@ fn reject_message(reason: Option<String>) -> String {
         format!("rejected: {reason}")
     } else {
         "the user actively rejected your request".into()
+    }
+}
+
+impl<T> From<mpsc::error::SendError<T>> for ToolHandlerError {
+    fn from(_value: mpsc::error::SendError<T>) -> Self {
+        Self::ChannelClosed
     }
 }

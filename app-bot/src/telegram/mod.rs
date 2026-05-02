@@ -1,27 +1,26 @@
 use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
 
 use ::futures::future;
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 use app_common::config::ParseConfigPath;
-use async_stream::{stream, try_stream};
+use async_stream::try_stream;
 use clap::Parser;
 use futures::{Stream, TryStreamExt, pin_mut};
 use itertools::Itertools;
+use lib_common::agent::decision::Decider;
+use lib_common::agent::memory::dialog::fs::FsDialogMemory;
+use lib_common::secure;
 use lib_common::{
-    agent::{LlmConditionMatcher, memory::sqlite::SqliteDecisionMemory},
-    llm::{
-        Model,
-        timeout::{ModelProducer, TimedModel},
-    },
-    polling::{Schedule, Scheduler, schedule::QueueType, task::Task},
+    agent::{LlmConditionMatcher, memory::decision::SqliteDecisionMemory},
+    llm::timeout::{ModelProducer, TimedModel},
+    polling::{Schedule, Scheduler, schedule::QueueType},
     source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed, atom::AtomFeed},
     update::sqlite::SqliteUpdatePersistence,
 };
 use llama_runner::{
     Gemma3VisionRunner, RunnerWithRecommendedSampling, error::CreateLlamaCppRunnerError,
 };
-use migration::FromValueTuple;
-use sea_orm::{ActiveEnum, DatabaseConnection, EntityTrait, Iterable, ModelTrait, TryFromU64};
+use sea_orm::{ActiveEnum, DatabaseConnection, EntityTrait, Iterable};
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::SmolStr;
 use teloxide::{
@@ -32,7 +31,7 @@ use teloxide::{
     payloads::SendMessageSetters,
     prelude::*,
 };
-use tokio::{select, sync::RwLock};
+use tokio::select;
 use tracing::{Instrument, Level, event, info_span};
 use tracing_subscriber::EnvFilter;
 
@@ -141,6 +140,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
                                 },
                                 Err(err) => {
                                     event!(Level::ERROR, "while polling: {err}");
+                                    break;
                                 },
                             }
                         },
@@ -191,7 +191,6 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         .filter_command::<Command>()
                         .branch(dptree::case![Command::Start].endpoint(start)),
                 )
-                .branch(dptree::case![State::Start].endpoint(authenticate))
                 .branch(dptree::case![State::Authenticating].endpoint(authenticate))
                 .branch(dptree::case![State::ChoseFeed { kind }].endpoint(receive_rss_url))
                 .branch(
@@ -205,7 +204,8 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         kind
                     }]
                     .endpoint(receive_rss_custom_headers),
-                ),
+                )
+                .endpoint(receive_feedback_msg),
         )
 }
 
@@ -234,7 +234,8 @@ async fn start_polling_all(
             match sub.kind {
                 subscription::Kind::Rss => {
                     let feed: RssFeed = rss.unwrap().try_into()?;
-                    let messages = get_update_messages(
+                    send_update_messages(
+                        &bot,
                         &feed,
                         feed.url(),
                         &sub,
@@ -242,15 +243,13 @@ async fn start_polling_all(
                         &scheduler,
                         db,
                         working_dir,
-                    );
-                    pin_mut!(messages);
-                    while let Some(msg) = messages.try_next().await? {
-                        bot.send_message(UserId(sub.user_id as u64), msg).await?;
-                    }
+                    )
+                    .await?;
                 }
                 subscription::Kind::Atom => {
                     let feed: AtomFeed = atom.unwrap().try_into()?;
-                    let messages = get_update_messages(
+                    send_update_messages(
+                        &bot,
                         &feed,
                         feed.url(),
                         &sub,
@@ -258,11 +257,8 @@ async fn start_polling_all(
                         &scheduler,
                         db,
                         working_dir,
-                    );
-                    pin_mut!(messages);
-                    while let Some(msg) = messages.try_next().await? {
-                        bot.send_message(UserId(sub.user_id as u64), msg).await?;
-                    }
+                    )
+                    .await?;
                 }
             }
 
@@ -274,7 +270,8 @@ async fn start_polling_all(
     Ok(())
 }
 
-fn get_update_messages<Feed_>(
+async fn send_update_messages<Feed_>(
+    bot: &Bot,
     feed: &Feed_,
     feed_url: &str,
     sub: &subscription::Model,
@@ -282,57 +279,67 @@ fn get_update_messages<Feed_>(
     scheduler: &Scheduler<SubscriptionId>,
     db: &DatabaseConnection,
     working_dir: &Path,
-) -> impl Stream<Item = Result<String, anyhow::Error>>
+) -> anyhow::Result<()>
 where
     Feed_: Feed<Metadata = DefaultMetadata>,
-    Feed_::Item: LlmComprehendable + Hash + Display + Serialize + DeserializeOwned + 'static,
+    Feed_::Item:
+        LlmComprehendable + Clone + Hash + Display + Serialize + DeserializeOwned + 'static,
     Feed_::Error: Display,
 {
-    try_stream! {
-        let sub_id = sub.id;
+    let sub_id = sub.id;
+    app_common::feed::check(
+        &sub_id,
+        feed,
+        &scheduler,
+        SqliteUpdatePersistence::new(db.clone(), sub_id)?,
+        sub.buffer_size as usize,
+    )
+    .try_for_each(async |(item, _)| {
+        let Some(item) = item else {
+            return Ok(());
+        };
         let decider = LlmConditionMatcher::new(
-            model,
+            model.clone(),
             sub.condition.to_string(),
             SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?,
+            FsDialogMemory::new(working_dir, secure::generate_random_id(32)),
         );
-        let updates = app_common::feed::check(
-            &sub_id,
-            feed,
-            &decider,
-            &scheduler,
-            SqliteUpdatePersistence::new(db.clone(), sub_id)?,
-            sub.buffer_size as usize,
-        );
-        pin_mut!(updates);
-        while let Some((title, _, is_truthy)) = updates.try_next().await? {
-            if !is_truthy {
-                continue;
-            }
-
-            match feed.get_metadata().await {
-                Ok(meta) => {
-                    yield format!(
-                        "Your subscription to \"{}\" ({}) has an update! Check it out!\n{}",
-                        meta.name,
-                        feed_url,
-                        title.unwrap_or_default()
-                    ).trim_end().to_string();
-                },
-                Err(err) => {
-                    event!(
-                        Level::WARN,
-                        "failed to fetch RSS feed metadata, falling back to URL only: {err}"
-                    );
-                    yield format!(
-                        "Your subscription to {} has an update! Check it out!\n{}",
-                        feed_url,
-                        title.unwrap_or_default()
-                    ).trim_end().to_string();
-                }
-            };
+        if !decider.get_truth_value(&item).await? {
+            return Ok(());
         }
-        event!(Level::WARN, "updates is supposed to be infinite, but ended prematurely. sub_id = {sub_id}");
-    }
+
+        let msg = match feed.get_metadata().await {
+            Ok(meta) => format!(
+                "Your subscription to \"{}\" ({}) has an update! Check it out!\n{}",
+                meta.name,
+                feed_url,
+                item.to_string(),
+            )
+            .trim_end()
+            .to_string(),
+            Err(err) => {
+                event!(
+                    Level::WARN,
+                    "failed to fetch RSS feed metadata, falling back to URL only: {err}"
+                );
+                format!(
+                    "Your subscription to {} has an update! Check it out!\n{}",
+                    feed_url,
+                    item.to_string(),
+                )
+                .trim_end()
+                .to_string()
+            }
+        };
+        let tg_msg = bot.send_message(UserId(sub.user_id as u64), msg).await?;
+        Ok(())
+    })
+    .await?;
+    event!(
+        Level::WARN,
+        "updates is supposed to be infinite, but ended prematurely. sub_id = {sub_id}"
+    );
+    Ok(())
 }
 
 async fn get_schedules(
@@ -691,6 +698,11 @@ async fn receive_rss_custom_headers(
     Ok(())
 }
 
-async fn receive_feedback_msg(bot: Bot, msg: Message) -> anyhow::Result<()> {
+async fn receive_feedback_msg(
+    bot: Bot,
+    msg: Message,
+    db: DatabaseConnection,
+) -> anyhow::Result<()> {
     let user_id = msg.from.unwrap().id.0 as UserId;
+    if let Some(reply) = msg.reply_to_message() {}
 }

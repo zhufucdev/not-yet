@@ -72,8 +72,9 @@ where
             return Ok(cached.clone());
         }
         event!(Level::DEBUG, "cache missed, building model {}", self.name);
+        let mut cache_guard = self.cache.write().await;
         let model = Arc::new(self.builder.0().await?);
-        *self.cache.write().await = Some(model.clone());
+        *cache_guard = Some(model.clone());
         Ok(model.clone())
     }
 }

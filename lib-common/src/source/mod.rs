@@ -31,10 +31,7 @@ pub struct DefaultMetadata {
 }
 
 #[trait_variant::make(Send)]
-pub trait Feed: Updatable
-where
-    <Self as Updatable>::Item: LlmComprehendable,
-{
+pub trait Feed: Updatable {
     type Metadata: LlmComprehendable;
 
     async fn get_metadata(&self) -> Result<Self::Metadata, <Self as Updatable>::Error>;

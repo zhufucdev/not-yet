@@ -34,6 +34,7 @@ pub struct Model {
 
 impl ActiveModelBehavior for ActiveModel {}
 
+#[derive(Clone)]
 pub struct SqliteDecisionMemory<U> {
     db: DatabaseConnection,
     agent_id: Option<i32>,
