@@ -372,10 +372,7 @@ where
             let mut req = gemma4::DialogRequest::new(gemma4::DialogTurn::User(initial_prompt))
                 .with_tools(tools);
             let runner = this.model.get_runner().await.map_err(Error::Model)?;
-            while !dialog.turns().last().is_some_and(|turn| match turn {
-                gemma4::DialogTurn::Assistant(res) => res.tool_calls.is_empty(),
-                _ => false,
-            }) {
+            loop {
                 let res = runner.get_dialog_continued(&req, &mut dialog).await?;
                 event!(Level::DEBUG, "model: {:#?}", res);
                 let tool_responses =
@@ -402,6 +399,14 @@ where
                         event!(Level::WARN, "failed to update dialog memory: {err}")
                     });
                 req.set_message(gemma4::DialogTurn::ToolResponses(tool_responses));
+
+                if !dialog.turns().last().is_some_and(|turn| match turn {
+                    gemma4::DialogTurn::Assistant(res) => res.tool_calls.is_empty(),
+                    _ => false,
+                }) {
+                    event!(Level::DEBUG, "optimization finished");
+                    break;
+                }
             }
             Ok(())
         })

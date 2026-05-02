@@ -784,7 +784,7 @@ async fn receive_feedback_msg(
                 cf_handler.clone(),
                 sub,
             ));
-            if let Some(mut optimization) = optimizer.optimize_inplace(reply.text()).await? {
+            if let Some(mut optimization) = optimizer.optimize_inplace(msg.text()).await? {
                 dialog
                     .update(State::Feedingback {
                         clareq: cf_handler.clone(),
@@ -829,6 +829,8 @@ async fn receive_feedback_msg(
                         })
                         .await?;
                 }
+                dialog.update(State::Start).await?;
+                event!(Level::DEBUG, "reset dialog after multi-turn LLM");
             } else {
                 bot.send_message(chat_id, "I don't know how to help with that, cause I forgot about the conversation. Sorry!").await?;
             }
