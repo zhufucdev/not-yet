@@ -4,6 +4,7 @@ use std::{
 };
 
 use sea_orm::{ExprTrait, prelude::*, sea_query};
+use tracing::{Level, event};
 
 use crate::{source::LlmComprehendable, update::UpdatePersistence};
 
@@ -59,7 +60,8 @@ where
         let key = self.key.clone();
         Entity::insert(ActiveModel::builder().set_hash(hash as i64).set_key(key))
             .exec(&self.db)
-            .await?;
+            .await
+            .inspect_err(|err| event!(Level::ERROR, "{err:?}"))?;
         Ok(())
     }
 

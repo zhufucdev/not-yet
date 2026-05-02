@@ -361,8 +361,9 @@ where
             .set_dialog_id(dialog_id)
             .set_msg_id(tg_msg.id.0)
             .set_subscription_id(sub.id)
-            .save(db)
-            .await?;
+            .insert(db)
+            .await
+            .inspect_err(|err| event!(Level::WARN, "failed to save dialog: {err}"))?;
         Ok(())
     })
     .await?;
@@ -770,7 +771,7 @@ async fn receive_feedback_msg(
             else {
                 bot.send_message(
                     msg.chat_id().unwrap(),
-                    "There's nothing I can do with that post. Sorry!",
+                    "There's nothing I can do with that message. Sorry!",
                 )
                 .await?;
                 return Ok(());

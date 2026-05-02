@@ -128,7 +128,8 @@ where
                 .get_runner()
                 .await
                 .map_err(GetTruthValueError::Model)?;
-            let req = gemma4::DialogRequest::new(gemma4::DialogTurn::User(messages));
+            let req =
+                gemma4::DialogRequest::new(gemma4::DialogTurn::User(messages)).enable_thinking();
             let mut dialog = MultiTurnDialog::new();
             let res = runner
                 .get_dialog_continued(&req, &mut dialog)

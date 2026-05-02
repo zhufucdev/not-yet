@@ -12,7 +12,7 @@ pub struct FsDialogMemory<D> {
 impl<D> FsDialogMemory<D> {
     pub fn new(working_dir: impl Into<PathBuf>, mem_id: impl AsRef<str>) -> Self {
         Self {
-            file_path: working_dir.into().join(mem_id.as_ref()),
+            file_path: working_dir.into().join("dialog").join(mem_id.as_ref()),
             _marker: Default::default(),
         }
     }

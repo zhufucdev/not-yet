@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use thiserror::Error;
+use tracing::{Level, event};
 
 use async_stream::try_stream;
 use futures::Stream;
@@ -78,7 +79,9 @@ where
         let material_fp = self.material_dir.join(&shasum);
         futures::future::try_join(
             async || -> Result<(), Self::Error> {
-                tokio::fs::write(material_fp, material_binary).await?;
+                tokio::fs::write(material_fp, material_binary)
+                    .await
+                    .inspect_err(|err| event!(Level::ERROR, "io: {err:?}"))?;
                 Ok(())
             }(),
             async || -> Result<(), Self::Error> {
@@ -92,7 +95,8 @@ where
                             .set_shasum(shasum),
                     )
                     .insert(&self.db)
-                    .await?;
+                    .await
+                    .inspect_err(|err| event!(Level::ERROR, "db: {err:?}"))?;
                 Ok(())
             }(),
         )
