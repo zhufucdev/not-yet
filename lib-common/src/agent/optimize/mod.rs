@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 use crate::llm::SharedImageOrText;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 
 pub mod gemma4;
 
@@ -11,16 +11,16 @@ pub mod gemma4;
 #[trait_variant::make(Send)]
 pub trait Optimizer<Dialog> {
     type Error;
-    async fn optimize(
+    fn optimize(
         self: &Arc<Self>,
-        prompt: Option<String>,
+        prompt: Option<impl ToString + Send>,
         dialog: &Dialog,
     ) -> OptimizationCallback<Self::Error>;
 }
 
 #[derive(Debug, Clone)]
 pub enum OptimizerAction {
-    ContextPrefill(Vec<SharedImageOrText>),
+    ContextPrefill(Vec<String>),
     Schedule(ScheduleParamters),
 }
 
@@ -73,5 +73,22 @@ impl<Error> OptimizationCallback<Error> {
             return Ok(None);
         };
         Ok(Some(res))
+    }
+}
+
+impl Display for ScheduleParamters {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut add_comma = false;
+        if let Some(interval) = self.interval_mins {
+            write!(f, "{} minutes apart", interval)?;
+            add_comma = true;
+        }
+        if let Some(buffer) = self.buffer_size {
+            if add_comma {
+                write!(f, ", and ")?;
+            }
+            write!(f, "allow at most {} staged posts", buffer)?;
+        }
+        Ok(())
     }
 }

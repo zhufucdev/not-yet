@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt::Display, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    sync::Arc,
+};
 
 use futures::future;
 use rmcp::{
@@ -7,6 +11,7 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use smol_str::ToSmolStr;
 use thiserror::Error;
 use tokio::sync::{RwLock, mpsc};
 
@@ -58,10 +63,10 @@ where
 {
     pub fn new(
         model: Model,
-        dialog_memory: impl Into<DiaMem>,
-        criteria_memory: impl Into<CriMem>,
-        clarification_handler: impl Into<ClarHandler>,
-        schedule: impl Into<Schedule>,
+        dialog_memory: DiaMem,
+        criteria_memory: CriMem,
+        clarification_handler: ClarHandler,
+        schedule: Schedule,
     ) -> Self {
         Self {
             model,
@@ -297,6 +302,25 @@ where
             ),
         ]
     }
+
+    pub async fn optimize_inplace(
+        self: &Arc<Self>,
+        prompt: Option<impl ToString + Send>,
+    ) -> Result<
+        Option<OptimizationCallback<<Self as Optimizer<gemma4::Dialog>>::Error>>,
+        DiaMem::Error,
+    >
+    where
+        Self: Optimizer<gemma4::Dialog>,
+        DiaMem: DialogMemory<Dialog = gemma4::Dialog>,
+        DiaMem::Error: Display + Debug,
+    {
+        if let Some(dialog) = self.dialog_memory.read().await.get().await? {
+            Ok(Some(self.optimize(prompt, &dialog)))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 impl<Model, Runner, DiaMem, CriMem, ClarHandler, Schedule> Optimizer<gemma4::Dialog>
@@ -316,15 +340,17 @@ where
 {
     type Error = Error<Model::Error>;
 
-    async fn optimize(
+    fn optimize(
         self: &Arc<Self>,
-        prompt: Option<String>,
+        prompt: Option<impl ToString + Send>,
         dialog: &gemma4::Dialog,
     ) -> OptimizationCallback<Self::Error> {
         let initial_prompt = {
             let literals = [(
                 "user_prompt".into(),
-                prompt.unwrap_or("I don't like this post.".into()),
+                prompt
+                    .map(|p| p.to_string())
+                    .unwrap_or("I don't like this post.".into()),
             )]
             .into_iter()
             .collect();

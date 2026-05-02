@@ -1,7 +1,9 @@
-use lib_common::agent::optimize::{Optimizer, gemma4::Gemma4Optimizer};
+use lib_common::agent::optimize::ApproveOrDeny;
 use smol_str::SmolStr;
+use teloxide::types::MessageId;
+use tokio::sync::mpsc;
 
-use crate::db::subscription;
+use crate::{db::subscription, telegram::clarify};
 
 #[derive(Clone, Default)]
 pub enum State {
@@ -28,6 +30,11 @@ pub enum State {
         kind: subscription::Kind,
     },
     Feedingback {
-        optimizer: Gemma4Optimizer<>
+        clareq: clarify::TgClarReqHandler,
+    },
+    ReviewingOptimization {
+        clareq: clarify::TgClarReqHandler,
+        approve: mpsc::Sender<ApproveOrDeny>,
+        prompt: MessageId,
     },
 }

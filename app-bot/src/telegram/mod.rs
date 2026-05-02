@@ -1,15 +1,22 @@
+use std::cell::LazyCell;
+use std::path::PathBuf;
 use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
 
 use ::futures::future;
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use app_common::config::ParseConfigPath;
-use async_stream::try_stream;
 use clap::Parser;
-use futures::{Stream, TryStreamExt, pin_mut};
+use futures::Stream;
+use futures::future::Lazy;
+use futures::{TryStreamExt, pin_mut};
 use itertools::Itertools;
 use lib_common::agent::decision::Decider;
+use lib_common::agent::memory::criteria::sqlite::SqliteCriteriaMemory;
 use lib_common::agent::memory::dialog::fs::FsDialogMemory;
-use lib_common::secure;
+use lib_common::agent::optimize::gemma4::Gemma4Optimizer;
+use lib_common::agent::optimize::{ApproveOrDeny, OptimizationCallback, OptimizerAction};
+use lib_common::llm::dialog::gemma4;
+use lib_common::{agent, llm, secure};
 use lib_common::{
     agent::{LlmConditionMatcher, memory::decision::SqliteDecisionMemory},
     llm::timeout::{ModelProducer, TimedModel},
@@ -17,12 +24,14 @@ use lib_common::{
     source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed, atom::AtomFeed},
     update::sqlite::SqliteUpdatePersistence,
 };
-use llama_runner::{
-    Gemma3VisionRunner, RunnerWithRecommendedSampling, error::CreateLlamaCppRunnerError,
-};
-use sea_orm::{ActiveEnum, DatabaseConnection, EntityTrait, Iterable};
+use llama_runner::Gemma4VisionRunner;
+use llama_runner::sample::SimpleSamplingParams;
+use llama_runner::{RunnerWithRecommendedSampling, error::CreateLlamaCppRunnerError};
+use sea_orm::{ActiveEnum, ColumnTrait, DatabaseConnection, EntityTrait, Iterable, QueryFilter};
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::SmolStr;
+use teloxide::types::{InlineKeyboardMarkup, MessageId};
+use teloxide::utils::render::RenderMessageTextHelper;
 use teloxide::{
     dispatching::{
         UpdateHandler,
@@ -32,6 +41,7 @@ use teloxide::{
     prelude::*,
 };
 use tokio::select;
+use tokio::sync::mpsc;
 use tracing::{Instrument, Level, event, info_span};
 use tracing_subscriber::EnvFilter;
 
@@ -52,6 +62,7 @@ use crate::{
 };
 
 mod args;
+mod clarify;
 mod command;
 mod repmark;
 mod state;
@@ -107,6 +118,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
                     InMemStorage::<State>::new(),
                     token,
                     db.clone(),
+                    data_path.clone(),
                     Arc::new(Authenticator::from((
                         WhitelistAuthenticator::new(
                             config.whitelist.unwrap_or_default(),
@@ -122,14 +134,9 @@ pub(super) async fn main() -> anyhow::Result<()> {
         ),
         Box::pin(
             async {
-                let model = TimedModel::new(
-                    "decider_vlm",
-                    Duration::from_mins(5),
-                    ModelProducer::new(async || Gemma3VisionRunner::default().await),
-                );
                 loop {
                     select! {
-                        result = start_polling_all(scheduler.clone(), model.clone(), &db, &data_path, &bot) => {
+                        result = start_polling_all(scheduler.clone(), llm::DEFAULT_MODEL.clone(), &db, &data_path, &bot) => {
                             match result {
                                 Ok(_) => {
                                     event!(
@@ -181,6 +188,15 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         kind,
                     }]
                     .endpoint(choose_rss_custom_headers),
+                )
+                .branch(dptree::case![State::Feedingback { clareq }].endpoint(reject_clarification))
+                .branch(
+                    dptree::case![State::ReviewingOptimization {
+                        clareq,
+                        approve,
+                        prompt
+                    }]
+                    .endpoint(approve_or_deny_optimization),
                 ),
         )
         .branch(
@@ -205,13 +221,21 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                     }]
                     .endpoint(receive_rss_custom_headers),
                 )
+                .branch(
+                    dptree::case![State::ReviewingOptimization {
+                        clareq,
+                        approve,
+                        prompt
+                    }]
+                    .endpoint(deny_optimization_with_reason),
+                )
                 .endpoint(receive_feedback_msg),
         )
 }
 
 async fn start_polling_all(
     scheduler: Arc<Scheduler<SubscriptionId>>,
-    model: TimedModel<RunnerWithRecommendedSampling<Gemma3VisionRunner>, CreateLlamaCppRunnerError>,
+    model: TimedModel<RunnerWithRecommendedSampling<Gemma4VisionRunner>, CreateLlamaCppRunnerError>,
     db: &DatabaseConnection,
     working_dir: &Path,
     bot: &Bot,
@@ -275,7 +299,7 @@ async fn send_update_messages<Feed_>(
     feed: &Feed_,
     feed_url: &str,
     sub: &subscription::Model,
-    model: TimedModel<RunnerWithRecommendedSampling<Gemma3VisionRunner>, CreateLlamaCppRunnerError>,
+    model: TimedModel<RunnerWithRecommendedSampling<Gemma4VisionRunner>, CreateLlamaCppRunnerError>,
     scheduler: &Scheduler<SubscriptionId>,
     db: &DatabaseConnection,
     working_dir: &Path,
@@ -298,11 +322,12 @@ where
         let Some(item) = item else {
             return Ok(());
         };
+        let dialog_id = secure::generate_random_id(32);
         let decider = LlmConditionMatcher::new(
             model.clone(),
             sub.condition.to_string(),
             SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?,
-            FsDialogMemory::new(working_dir, secure::generate_random_id(32)),
+            FsDialogMemory::new(working_dir, &dialog_id),
         );
         if !decider.get_truth_value(&item).await? {
             return Ok(());
@@ -332,6 +357,12 @@ where
             }
         };
         let tg_msg = bot.send_message(UserId(sub.user_id as u64), msg).await?;
+        db::dialog::ActiveModel::builder()
+            .set_dialog_id(dialog_id)
+            .set_msg_id(tg_msg.id.0)
+            .set_subscription_id(sub.id)
+            .save(db)
+            .await?;
         Ok(())
     })
     .await?;
@@ -702,7 +733,193 @@ async fn receive_feedback_msg(
     bot: Bot,
     msg: Message,
     db: DatabaseConnection,
+    dialog: MasterDialog,
+    working_dir: PathBuf,
 ) -> anyhow::Result<()> {
-    let user_id = msg.from.unwrap().id.0 as UserId;
-    if let Some(reply) = msg.reply_to_message() {}
+    let chat_id = msg.chat_id().unwrap();
+    if let Some(State::Feedingback { clareq }) = dialog.get().await? {
+        if !clareq.empty().await {
+            return Ok(());
+        }
+        let Some(clarification) = msg.markdown_text() else {
+            bot.send_message(chat_id, "I do not understand your input. Sorry! Feel free to try again using a different one.").await?;
+            return Ok(());
+        };
+        if let Some(reply) = msg.reply_to_message() {
+            if let Some(quote) = reply.markdown_text() {
+                clareq
+                    .send(format!(
+                        "> {}\n{}",
+                        quote.replace("\n", "\n> "),
+                        clarification
+                    ))
+                    .await;
+            } else {
+                clareq.send(clarification).await;
+            }
+        } else {
+            clareq.send(clarification).await;
+        }
+    } else {
+        if let Some(reply) = msg.reply_to_message() {
+            let Some((model, Some(sub))) = db::dialog::Entity::find()
+                .filter(db::dialog::Column::MsgId.eq(reply.id.0))
+                .find_also_related(db::subscription::Entity)
+                .one(&db)
+                .await?
+            else {
+                bot.send_message(
+                    msg.chat_id().unwrap(),
+                    "There's nothing I can do with that post. Sorry!",
+                )
+                .await?;
+                return Ok(());
+            };
+            let cf_handler = clarify::TgClarReqHandler::new(bot.clone(), chat_id);
+            let optimizer = Arc::new(Gemma4Optimizer::new(
+                llm::DEFAULT_MODEL.clone(),
+                FsDialogMemory::<gemma4::Dialog>::new(working_dir, model.dialog_id),
+                SqliteCriteriaMemory::new(db.clone(), Some(model.subscription_id)),
+                cf_handler.clone(),
+                sub,
+            ));
+            if let Some(mut optimization) = optimizer.optimize_inplace(reply.text()).await? {
+                dialog
+                    .update(State::Feedingback {
+                        clareq: cf_handler.clone(),
+                    })
+                    .await?;
+                bot.send_message(chat_id, "Working on it...").await?;
+                while let Some((action, approve)) = optimization
+                    .accept()
+                    .await
+                    .context("optimization channel closed")?
+                {
+                    let prompt = match action {
+                        OptimizerAction::ContextPrefill(context) => bot.send_message(
+                            chat_id,
+                            if context.len() == 1 {
+                                format!(
+                                    "I would like to add a filtering criterion:\n{}",
+                                    context.first().unwrap()
+                                )
+                            } else {
+                                format!(
+                                    "I would like to add filtering criteria:\n- {}",
+                                    context.join("\n- ")
+                                )
+                            },
+                        ),
+                        OptimizerAction::Schedule(schedule) => bot.send_message(
+                            chat_id,
+                            format!("Better to reschedule this as {schedule}"),
+                        ),
+                    }
+                    .reply_markup(repmark::button_repmark([vec![
+                        ("Approve", "y"),
+                        ("Deny", "n"),
+                    ]]))
+                    .await?;
+                    dialog
+                        .update(State::ReviewingOptimization {
+                            clareq: cf_handler.clone(),
+                            approve,
+                            prompt: prompt.id,
+                        })
+                        .await?;
+                }
+            } else {
+                bot.send_message(chat_id, "I don't know how to help with that, cause I forgot about the conversation. Sorry!").await?;
+            }
+        } else {
+            bot.send_message(
+                chat_id,
+                concat!(
+                    "I don't know what to help you with. ",
+                    "Please reply to a message of mine so that we can get started."
+                ),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn approve_or_deny_optimization(
+    bot: Bot,
+    query: CallbackQuery,
+    (_, approve, _): (
+        clarify::TgClarReqHandler,
+        mpsc::Sender<ApproveOrDeny>,
+        MessageId,
+    ), // State::ReviewingOptimization
+) -> anyhow::Result<()> {
+    let chat_id = query.chat_id().unwrap();
+    let Some(data) = query.data.as_ref() else {
+        bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
+        return Ok(());
+    };
+    match data.as_str() {
+        "y" => {
+            repmark::remove(&query, &bot).await;
+            approve.send(ApproveOrDeny::Approve).await?;
+        }
+        "n" => {
+            repmark::remove(&query, &bot).await;
+            approve.send(ApproveOrDeny::Deny { reason: None }).await?;
+        }
+        _ => {
+            bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn deny_optimization_with_reason(
+    bot: Bot,
+    msg: Message,
+    (_, approve, prompt): (
+        clarify::TgClarReqHandler,
+        mpsc::Sender<ApproveOrDeny>,
+        MessageId,
+    ), // State::ReviewingOptimization
+) -> anyhow::Result<()> {
+    if let Some(reason) = msg.markdown_text() {
+        _ = bot
+            .edit_message_reply_markup(msg.chat_id().unwrap(), prompt)
+            .reply_markup(InlineKeyboardMarkup::default())
+            .await
+            .inspect_err(|err| event!(Level::WARN, "error removing reply markup: {err}"));
+        approve
+            .send(ApproveOrDeny::Deny {
+                reason: Some(reason),
+            })
+            .await?;
+    } else {
+        bot.send_message(
+            msg.chat_id().unwrap(),
+            "I do not understand your input. Feel free to try again anytime",
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn reject_clarification(
+    bot: Bot,
+    query: CallbackQuery,
+    clareq: clarify::TgClarReqHandler,
+) -> anyhow::Result<()> {
+    let Some(data) = query.data.as_ref() else {
+        bot.send_message(query.chat_id().unwrap(), EMPTY_MESSAGE_RESPONSE)
+            .await?;
+        return Ok(());
+    };
+    if data.as_str() == "n" {
+        clareq.reject().await;
+    } else {
+        bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
+            .await?;
+    }
+    Ok(())
 }

@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use lib_common::agent::optimize::gemma4::ScheduleParamterAccessor;
 use lib_common::polling::trigger::ScheduleTrigger;
 use sea_orm::prelude::*;
 use sea_orm::strum::Display;
@@ -67,5 +68,15 @@ impl Model {
         } else {
             ScheduleTrigger::Interval(Duration::from_mins(60))
         }
+    }
+}
+
+impl ScheduleParamterAccessor for Model {
+    async fn get_interval_mins(&self) -> u32 {
+        self.interval_mins.unwrap_or(60) as u32
+    }
+
+    async fn get_buffer_size(&self) -> usize {
+        self.buffer_size as usize
     }
 }

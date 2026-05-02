@@ -87,3 +87,29 @@ impl<T> Deref for UnsafeBox<T> {
         &self.0
     }
 }
+
+#[cfg(test)]
+mod test {
+    use llama_runner::{
+        Gemma4VisionRunner, MessageRole, mcp::Gemma4ChatTemplate,
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_async_runner() {
+        let runner = Arc::new(Gemma4VisionRunner::default().await.unwrap());
+        let response = runner
+            .get_vlm_response_async(GenericRunnerRequest {
+                messages: vec![(
+                    MessageRole::User,
+                    SharedImageOrText::Text("What is the capital of France?".into()),
+                )],
+                tmpl: Gemma4ChatTemplate::default(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(response.contains("Paris"));
+    }
+}

@@ -27,7 +27,7 @@ use crate::{
     config::{Config, RssConfig, RunMode, Subscription, ToFeed},
 };
 use lib_common::{
-    agent::{LlmConditionMatcher, memory::sqlite::SqliteDecisionMemory},
+    agent::{LlmConditionMatcher, memory::decision::SqliteDecisionMemory},
     llm::timeout::{ModelProducer, TimedModel},
     polling::{self, Scheduler, trigger::ScheduleTrigger},
     source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed},

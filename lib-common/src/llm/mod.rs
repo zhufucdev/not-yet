@@ -7,9 +7,12 @@ use serde_with::serde_as;
 use smol_str::{SmolStr, ToSmolStr};
 
 pub mod async_runner;
+mod default;
 pub mod dialog;
 pub mod owned;
 pub mod timeout;
+
+pub use default::DEFAULT_MODEL;
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]

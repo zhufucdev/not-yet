@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
-use crate::llm::dialog::{
-    DialogRequest as _, MultiTurnDialog, MultiTurnDialogEnabled, WithMaxSeq,
-    gemma4::{
-        DialogRequest, DialogTurn, ToolResponse, assistant::AssistantResponse, tool::ToolResult,
+use crate::llm::{
+    self, Model,
+    dialog::{
+        DialogRequest as _, MultiTurnDialog, MultiTurnDialogEnabled, WithMaxSeq,
+        gemma4::{
+            DialogRequest, DialogTurn, ToolResponse, assistant::AssistantResponse, tool::ToolResult,
+        },
     },
 };
 
-use llama_runner::Gemma4VisionRunner;
 use rmcp::{handler::server::tool::schema_for_type, model::Tool, schemars::JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -16,7 +18,7 @@ use tracing_test::traced_test;
 #[tokio::test]
 #[traced_test]
 async fn tool_use() {
-    let runner = Arc::new(Gemma4VisionRunner::default().await.unwrap());
+    let runner = llm::DEFAULT_MODEL.clone().get_runner().await.unwrap();
     let mut dialog = MultiTurnDialog::new();
     #[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
     struct UpdateFavNumberParams {

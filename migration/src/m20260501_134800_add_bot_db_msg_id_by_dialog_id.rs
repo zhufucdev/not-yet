@@ -5,6 +5,7 @@ enum MsgIdByDialogId {
     Table,
     DialogId,
     MsgId,
+    SubscriptionId,
 }
 
 #[derive(DeriveMigrationName)]
@@ -19,7 +20,8 @@ impl MigrationTrait for Migration {
                     .table(MsgIdByDialogId::Table)
                     .if_not_exists()
                     .col(string(MsgIdByDialogId::DialogId).primary_key())
-                    .col(string(MsgIdByDialogId::MsgId))
+                    .col(integer(MsgIdByDialogId::MsgId))
+                    .col(integer(MsgIdByDialogId::SubscriptionId))
                     .to_owned(),
             )
             .await

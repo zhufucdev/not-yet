@@ -215,7 +215,7 @@ mod test {
         })
         .to_string();
         let ch1_applicable = matcher
-            .get_truth_value(DefaultUpdate::new(
+            .get_truth_value(&DefaultUpdate::new(
                 "Chapter 1 - The New Girl",
                 [ch1.into()],
                 Some("RSS item".into()),
@@ -232,7 +232,7 @@ mod test {
         })
         .to_string();
         let ch2_applicable = matcher
-            .get_truth_value(DefaultUpdate::new(
+            .get_truth_value(&DefaultUpdate::new(
                 "Chapter 2 - Secrets and Lies",
                 [ch2.into()],
                 Some("RSS item".into()),
@@ -249,7 +249,7 @@ mod test {
         })
         .to_string();
         let ch3_applicable = matcher
-            .get_truth_value(DefaultUpdate::new(
+            .get_truth_value(&DefaultUpdate::new(
                 "Chapter 3 - Normal People",
                 [ch3.into()],
                 Some("RSS item".into()),
@@ -266,7 +266,7 @@ mod test {
         })
         .to_string();
         let ch4_applicable = matcher
-            .get_truth_value(DefaultUpdate::new(
+            .get_truth_value(&DefaultUpdate::new(
                 "Chapter 4 - Not the Same",
                 [ch4.into()],
                 Some("RSS item".into()),

@@ -17,6 +17,7 @@ pub trait LlmComprehendable {
     fn get_message(&self) -> Vec<SharedImageOrText>;
 }
 
+#[derive(Debug, Clone)]
 pub struct DefaultUpdate {
     pub title: String,
     images: Vec<Arc<image::DynamicImage>>,
