@@ -4,6 +4,7 @@ use crate::{
     agent::{
         error::GetTruthValueError,
         memory::{
+            criteria::{self, CriteriaMemory},
             decision::{Decision, DecisionMemory},
             dialog::DialogMemory,
         },
@@ -23,31 +24,36 @@ use smol_str::ToSmolStr;
 use tokio::{pin, sync::RwLock};
 use tracing::{Instrument, Level, debug_span, event, info_span};
 
-pub struct LlmConditionMatcher<Model, DecisionMemory, DialogMemory> {
+pub struct LlmConditionMatcher<Model, DecisionMemory, DialogMemory, Criteria> {
     model: Model,
     condition: String,
     decmem: Arc<RwLock<DecisionMemory>>,
     diamem: Arc<RwLock<DialogMemory>>,
+    criteria: Arc<Criteria>,
 }
 
-impl<Model, DecisionMemory, DialogMemory> LlmConditionMatcher<Model, DecisionMemory, DialogMemory> {
+impl<Model, DecisionMemory, DialogMemory, Criteria>
+    LlmConditionMatcher<Model, DecisionMemory, DialogMemory, Criteria>
+{
     pub fn new(
         model: Model,
         condition: impl ToString,
         decision_memory: DecisionMemory,
         dialog_memory: DialogMemory,
+        criteria: Criteria,
     ) -> Self {
         Self {
             model,
             condition: condition.to_string(),
             decmem: Arc::new(RwLock::new(decision_memory)),
             diamem: Arc::new(RwLock::new(dialog_memory)),
+            criteria: Arc::new(criteria),
         }
     }
 }
 
-impl<Model, Runner, Update, DecMem, DiaMem> super::Decider
-    for LlmConditionMatcher<Model, DecMem, DiaMem>
+impl<Model, Runner, Update, DecMem, DiaMem, Criteria> super::Decider
+    for LlmConditionMatcher<Model, DecMem, DiaMem, Criteria>
 where
     Model: llm::Model<Runner = Runner> + Sync + Send,
     for<'se, 'req> Runner:
@@ -58,11 +64,13 @@ where
     DecMem::Material: Send + Sync,
     DiaMem: DialogMemory<Dialog = gemma4::Dialog>,
     DiaMem::Error: Debug,
+    Criteria: CriteriaMemory,
 {
     type Material = Update;
     type Error = GetTruthValueError<
         Model::Error,
         DecMem::Error,
+        Criteria::Error,
         <Runner as MultiTurnDialogEnabled<'static, gemma4::DialogTemplate>>::Error,
     >;
 
@@ -79,11 +87,26 @@ where
                             Err(_) => true,
                         })
                     })
-                    .map_err(|e| GetTruthValueError::Memory(e));
+                    .map_err(|e| GetTruthValueError::DecisionMemory(e));
                 pin!(stream);
                 let newest_truthy_mem = stream.try_next().await?;
 
-                let literals = [("condition".into(), self.condition.clone())].into();
+                let literals = [
+                    ("condition".into(), self.condition.clone()),
+                    (
+                        "criteria".into(),
+                        self.criteria
+                            .get()
+                            .await
+                            .map_err(GetTruthValueError::CriteriaMemory)?
+                            .into_iter()
+                            .map(|c| format!("- {}", c.as_ref()))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
+                ]
+                .into();
+
                 let mut macros = PromptMacros::new();
                 macros.insert(
                     "update".into(),
@@ -174,7 +197,7 @@ where
                     is_truthy: truthy,
                 })
                 .await
-                .map_err(GetTruthValueError::Memory)?;
+                .map_err(GetTruthValueError::DecisionMemory)?;
             Ok(truthy)
         }
         .instrument(post_process_span)
@@ -191,7 +214,10 @@ mod test {
     use crate::{
         agent::{
             decision::Decider,
-            memory::{decision::debug::DebugDecisionMemory, dialog::debug::DebugDialogMemory},
+            memory::{
+                criteria::debug::DebugCriteriaMemory, decision::debug::DebugDecisionMemory,
+                dialog::debug::DebugDialogMemory,
+            },
         },
         llm::owned::OwnedModel,
         source::DefaultUpdate,
@@ -207,6 +233,7 @@ mod test {
             "there has been at least 2 chapters since last time or ever",
             DebugDecisionMemory::new(),
             DebugDialogMemory::new(),
+            DebugCriteriaMemory::new(),
         );
         let ch1 = json!({
             "title": "Ch. 1: The New Girl",

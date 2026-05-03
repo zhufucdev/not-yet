@@ -24,11 +24,13 @@ pub enum TemplateExpansionError {
 }
 
 #[derive(Debug, Error)]
-pub enum GetTruthValueError<ModelError, MemoryError, RunnerError> {
+pub enum GetTruthValueError<Model, Dec, Crit, Runner> {
     #[error("agent model: {0}")]
-    Model(ModelError),
+    Model(Model),
     #[error("agent runner: {0}")]
-    Runner(RunnerError),
-    #[error("agent memory: {0}")]
-    Memory(MemoryError),
+    Runner(Runner),
+    #[error("decision memory: {0}")]
+    DecisionMemory(Dec),
+    #[error("criteria memory: {0}")]
+    CriteriaMemory(Crit),
 }

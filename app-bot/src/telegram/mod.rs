@@ -330,6 +330,7 @@ where
                 sub.condition.to_string(),
                 SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?,
                 FsDialogMemory::new(working_dir, &dialog_id),
+                SqliteCriteriaMemory::new(db.clone(), Some(sub_id)),
             );
             if !decider.get_truth_value(&item).await? {
                 return Ok(());
