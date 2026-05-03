@@ -13,6 +13,7 @@ pub struct TgClarReqHandler {
     chat_id: ChatId,
     tx: mpsc::Sender<Option<String>>,
     rx: Arc<RwLock<mpsc::Receiver<Option<String>>>>,
+    pending: Arc<RwLock<usize>>,
 }
 
 impl TgClarReqHandler {
@@ -23,6 +24,7 @@ impl TgClarReqHandler {
             chat_id,
             tx,
             rx: Arc::new(RwLock::new(rx)),
+            pending: Arc::new(RwLock::new(0)),
         }
     }
 
@@ -38,7 +40,7 @@ impl TgClarReqHandler {
     }
 
     pub async fn empty(&self) -> bool {
-        self.rx.read().await.capacity() >= 1
+        Arc::strong_count(&self.rx) <= 0
     }
 }
 

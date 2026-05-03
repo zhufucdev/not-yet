@@ -744,7 +744,12 @@ async fn receive_feedback_msg(
 ) -> anyhow::Result<()> {
     let chat_id = msg.chat_id().unwrap();
     if let Some(State::Feedingback { clareq }) = dialog.get().await? {
+        event!(Level::TRACE, "state = feedback");
         if !clareq.empty().await {
+            event!(
+                Level::WARN,
+                "clarification request handler is not empty, ignoring"
+            );
             return Ok(());
         }
         let Some(clarification) = msg.markdown_text() else {
@@ -767,6 +772,7 @@ async fn receive_feedback_msg(
             clareq.send(clarification).await;
         }
     } else {
+        event!(Level::TRACE, "state = start");
         if let Some(reply) = msg.reply_to_message() {
             let Some((model, Some(sub))) = db::dialog::Entity::find()
                 .filter(db::dialog::Column::MsgId.eq(reply.id.0))
@@ -789,53 +795,19 @@ async fn receive_feedback_msg(
                 cf_handler.clone(),
                 sub,
             ));
-            if let Some(mut optimization) = optimizer.optimize_inplace(msg.text()).await? {
+            if let Some(optimization) = optimizer.optimize_inplace(msg.text()).await? {
                 dialog
                     .update(State::Feedingback {
                         clareq: cf_handler.clone(),
                     })
                     .await?;
-                bot.send_message(chat_id, "Working on it...").await?;
-                while let Some((action, approve)) = optimization
-                    .accept()
-                    .await
-                    .context("optimization channel closed")?
-                {
-                    let prompt = match action {
-                        OptimizerAction::ContextPrefill(context) => bot.send_message(
-                            chat_id,
-                            if context.len() == 1 {
-                                format!(
-                                    "I would like to add a filtering criterion:\n{}",
-                                    context.first().unwrap()
-                                )
-                            } else {
-                                format!(
-                                    "I would like to add filtering criteria:\n- {}",
-                                    context.join("\n- ")
-                                )
-                            },
-                        ),
-                        OptimizerAction::Schedule(schedule) => bot.send_message(
-                            chat_id,
-                            format!("Better to reschedule this as {schedule}"),
-                        ),
-                    }
-                    .reply_markup(repmark::button_repmark([vec![
-                        ("Approve", "y"),
-                        ("Deny", "n"),
-                    ]]))
-                    .await?;
-                    dialog
-                        .update(State::ReviewingOptimization {
-                            clareq: cf_handler.clone(),
-                            approve,
-                            prompt: prompt.id,
-                        })
-                        .await?;
-                }
-                dialog.update(State::Start).await?;
-                event!(Level::DEBUG, "reset dialog after multi-turn LLM");
+                tokio::spawn(handle_optimization(
+                    optimization,
+                    cf_handler,
+                    bot,
+                    chat_id,
+                    dialog,
+                ));
             } else {
                 bot.send_message(chat_id, "I don't know how to help with that, cause I forgot about the conversation. Sorry!").await?;
             }
@@ -893,6 +865,7 @@ async fn deny_optimization_with_reason(
     ), // State::ReviewingOptimization
 ) -> anyhow::Result<()> {
     if let Some(reason) = msg.markdown_text() {
+        event!(Level::TRACE, "reason = {reason}");
         _ = bot
             .edit_message_reply_markup(msg.chat_id().unwrap(), prompt)
             .reply_markup(InlineKeyboardMarkup::default())
@@ -904,6 +877,7 @@ async fn deny_optimization_with_reason(
             })
             .await?;
     } else {
+        event!(Level::TRACE, "empty text message");
         bot.send_message(
             msg.chat_id().unwrap(),
             "I do not understand your input. Feel free to try again anytime",
@@ -918,6 +892,7 @@ async fn reject_clarification(
     query: CallbackQuery,
     clareq: clarify::TgClarReqHandler,
 ) -> anyhow::Result<()> {
+    event!(Level::TRACE, "data = {:?}", query.data);
     let Some(data) = query.data.as_ref() else {
         bot.send_message(query.chat_id().unwrap(), EMPTY_MESSAGE_RESPONSE)
             .await?;
@@ -929,5 +904,58 @@ async fn reject_clarification(
         bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
             .await?;
     }
+    Ok(())
+}
+
+async fn handle_optimization<Error>(
+    mut optimization: OptimizationCallback<Error>,
+    cf_handler: clarify::TgClarReqHandler,
+    bot: Bot,
+    chat_id: ChatId,
+    dialog: MasterDialog,
+) -> anyhow::Result<()>
+where
+    Error: std::error::Error + Send + Sync + 'static,
+{
+    bot.send_message(chat_id, "Working on it...").await?;
+    while let Some((action, approve)) = optimization
+        .accept()
+        .await
+        .context("optimization channel closed")?
+    {
+        let prompt = match action {
+            OptimizerAction::ContextPrefill(context) => bot.send_message(
+                chat_id,
+                if context.len() == 1 {
+                    format!(
+                        "I would like to add a filtering criterion:\n{}",
+                        context.first().unwrap()
+                    )
+                } else {
+                    format!(
+                        "I would like to add filtering criteria:\n- {}",
+                        context.join("\n- ")
+                    )
+                },
+            ),
+            OptimizerAction::Schedule(schedule) => {
+                bot.send_message(chat_id, format!("Better to reschedule this as {schedule}"))
+            }
+        }
+        .reply_markup(repmark::button_repmark([vec![
+            ("Approve", "y"),
+            ("Deny", "n"),
+        ]]))
+        .await?;
+        dialog
+            .update(State::ReviewingOptimization {
+                clareq: cf_handler.clone(),
+                approve,
+                prompt: prompt.id,
+            })
+            .await?;
+    }
+    dialog.update(State::Start).await?;
+    event!(Level::DEBUG, "reset dialog after multi-turn LLM");
     Ok(())
 }
