@@ -759,10 +759,10 @@ async fn receive_feedback_msg(
     let chat_id = msg.chat_id().unwrap();
     if let Some(State::Feedingback { clareq }) = dialog.get().await? {
         event!(Level::TRACE, "state = feedback");
-        if !clareq.empty().await {
+        if clareq.empty().await {
             event!(
                 Level::WARN,
-                "clarification request handler is not empty, ignoring"
+                "clarification request handler is empty, ignoring"
             );
             return Ok(());
         }
