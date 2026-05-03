@@ -6,5 +6,6 @@
   <expand>{update}</expand>
   <p>Is it true that {condition}?</p>
   <p>Avoid: explanations, overthinking</p>
+  <p>Note: {criteria}</p>
   <p>Answer in "Yes" or "No"</p>
 </prompt>

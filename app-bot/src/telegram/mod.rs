@@ -1,29 +1,37 @@
+use std::cell::LazyCell;
+use std::path::PathBuf;
 use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
 
 use ::futures::future;
 use anyhow::{Context, anyhow};
 use app_common::config::ParseConfigPath;
-use async_stream::{stream, try_stream};
 use clap::Parser;
-use futures::{Stream, TryStreamExt, pin_mut};
+use futures::Stream;
+use futures::future::Lazy;
+use futures::{TryStreamExt, pin_mut};
 use itertools::Itertools;
+use lib_common::agent::decision::Decider;
+use lib_common::agent::memory::criteria::sqlite::SqliteCriteriaMemory;
+use lib_common::agent::memory::dialog::fs::FsDialogMemory;
+use lib_common::agent::optimize::gemma4::Gemma4Optimizer;
+use lib_common::agent::optimize::{ApproveOrDeny, OptimizationCallback, OptimizerAction};
+use lib_common::llm::dialog::gemma4;
+use lib_common::{agent, llm, secure};
 use lib_common::{
-    agent::{LlmConditionMatcher, memory::sqlite::SqliteDecisionMemory},
-    llm::{
-        Model,
-        timeout::{ModelProducer, TimedModel},
-    },
-    polling::{Schedule, Scheduler, schedule::QueueType, task::Task},
+    agent::{LlmConditionMatcher, memory::decision::SqliteDecisionMemory},
+    llm::timeout::{ModelProducer, TimedModel},
+    polling::{Schedule, Scheduler, schedule::QueueType},
     source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed, atom::AtomFeed},
     update::sqlite::SqliteUpdatePersistence,
 };
-use llama_runner::{
-    Gemma3VisionRunner, RunnerWithRecommendedSampling, error::CreateLlamaCppRunnerError,
-};
-use migration::FromValueTuple;
-use sea_orm::{ActiveEnum, DatabaseConnection, EntityTrait, Iterable, ModelTrait, TryFromU64};
+use llama_runner::Gemma4VisionRunner;
+use llama_runner::sample::SimpleSamplingParams;
+use llama_runner::{RunnerWithRecommendedSampling, error::CreateLlamaCppRunnerError};
+use sea_orm::{ActiveEnum, ColumnTrait, DatabaseConnection, EntityTrait, Iterable, QueryFilter};
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::SmolStr;
+use teloxide::types::{InlineKeyboardMarkup, MessageId};
+use teloxide::utils::render::RenderMessageTextHelper;
 use teloxide::{
     dispatching::{
         UpdateHandler,
@@ -32,7 +40,8 @@ use teloxide::{
     payloads::SendMessageSetters,
     prelude::*,
 };
-use tokio::{select, sync::RwLock};
+use tokio::select;
+use tokio::sync::mpsc;
 use tracing::{Instrument, Level, event, info_span};
 use tracing_subscriber::EnvFilter;
 
@@ -53,6 +62,7 @@ use crate::{
 };
 
 mod args;
+mod clarify;
 mod command;
 mod repmark;
 mod state;
@@ -108,6 +118,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
                     InMemStorage::<State>::new(),
                     token,
                     db.clone(),
+                    data_path.clone(),
                     Arc::new(Authenticator::from((
                         WhitelistAuthenticator::new(
                             config.whitelist.unwrap_or_default(),
@@ -123,14 +134,9 @@ pub(super) async fn main() -> anyhow::Result<()> {
         ),
         Box::pin(
             async {
-                let model = TimedModel::new(
-                    "decider_vlm",
-                    Duration::from_mins(5),
-                    ModelProducer::new(async || Gemma3VisionRunner::default().await),
-                );
                 loop {
                     select! {
-                        result = start_polling_all(scheduler.clone(), model.clone(), &db, &data_path, &bot) => {
+                        result = start_polling_all(scheduler.clone(), llm::DEFAULT_MODEL.clone(), &db, &data_path, &bot) => {
                             match result {
                                 Ok(_) => {
                                     event!(
@@ -141,6 +147,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
                                 },
                                 Err(err) => {
                                     event!(Level::ERROR, "while polling: {err}");
+                                    break;
                                 },
                             }
                         },
@@ -181,6 +188,15 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         kind,
                     }]
                     .endpoint(choose_rss_custom_headers),
+                )
+                .branch(dptree::case![State::Feedingback { clareq }].endpoint(reject_clarification))
+                .branch(
+                    dptree::case![State::ReviewingOptimization {
+                        clareq,
+                        approve,
+                        prompt
+                    }]
+                    .endpoint(approve_or_deny_optimization),
                 ),
         )
         .branch(
@@ -204,13 +220,22 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         kind
                     }]
                     .endpoint(receive_rss_custom_headers),
-                ),
+                )
+                .branch(
+                    dptree::case![State::ReviewingOptimization {
+                        clareq,
+                        approve,
+                        prompt
+                    }]
+                    .endpoint(deny_optimization_with_reason),
+                )
+                .endpoint(receive_feedback_msg),
         )
 }
 
 async fn start_polling_all(
     scheduler: Arc<Scheduler<SubscriptionId>>,
-    model: TimedModel<RunnerWithRecommendedSampling<Gemma3VisionRunner>, CreateLlamaCppRunnerError>,
+    model: TimedModel<RunnerWithRecommendedSampling<Gemma4VisionRunner>, CreateLlamaCppRunnerError>,
     db: &DatabaseConnection,
     working_dir: &Path,
     bot: &Bot,
@@ -233,7 +258,8 @@ async fn start_polling_all(
             match sub.kind {
                 subscription::Kind::Rss => {
                     let feed: RssFeed = rss.unwrap().try_into()?;
-                    let messages = get_update_messages(
+                    send_update_messages(
+                        &bot,
                         &feed,
                         feed.url(),
                         &sub,
@@ -241,15 +267,13 @@ async fn start_polling_all(
                         &scheduler,
                         db,
                         working_dir,
-                    );
-                    pin_mut!(messages);
-                    while let Some(msg) = messages.try_next().await? {
-                        bot.send_message(UserId(sub.user_id as u64), msg).await?;
-                    }
+                    )
+                    .await?;
                 }
                 subscription::Kind::Atom => {
                     let feed: AtomFeed = atom.unwrap().try_into()?;
-                    let messages = get_update_messages(
+                    send_update_messages(
+                        &bot,
                         &feed,
                         feed.url(),
                         &sub,
@@ -257,11 +281,8 @@ async fn start_polling_all(
                         &scheduler,
                         db,
                         working_dir,
-                    );
-                    pin_mut!(messages);
-                    while let Some(msg) = messages.try_next().await? {
-                        bot.send_message(UserId(sub.user_id as u64), msg).await?;
-                    }
+                    )
+                    .await?;
                 }
             }
 
@@ -273,65 +294,90 @@ async fn start_polling_all(
     Ok(())
 }
 
-fn get_update_messages<Feed_>(
+async fn send_update_messages<Feed_>(
+    bot: &Bot,
     feed: &Feed_,
     feed_url: &str,
     sub: &subscription::Model,
-    model: TimedModel<RunnerWithRecommendedSampling<Gemma3VisionRunner>, CreateLlamaCppRunnerError>,
+    model: TimedModel<RunnerWithRecommendedSampling<Gemma4VisionRunner>, CreateLlamaCppRunnerError>,
     scheduler: &Scheduler<SubscriptionId>,
     db: &DatabaseConnection,
     working_dir: &Path,
-) -> impl Stream<Item = Result<String, anyhow::Error>>
+) -> anyhow::Result<()>
 where
     Feed_: Feed<Metadata = DefaultMetadata>,
-    Feed_::Item: LlmComprehendable + Hash + Display + Serialize + DeserializeOwned + 'static,
+    Feed_::Item:
+        LlmComprehendable + Clone + Hash + Display + Serialize + DeserializeOwned + 'static,
     Feed_::Error: Display,
 {
-    try_stream! {
-        let sub_id = sub.id;
-        let decider = LlmConditionMatcher::new(
-            model,
-            sub.condition.to_string(),
-            SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?,
-        );
-        let updates = app_common::feed::check(
-            &sub_id,
-            feed,
-            &decider,
-            &scheduler,
-            SqliteUpdatePersistence::new(db.clone(), sub_id)?,
-            sub.buffer_size as usize,
-        );
-        pin_mut!(updates);
-        while let Some((title, _, is_truthy)) = updates.try_next().await? {
-            if !is_truthy {
-                continue;
+    let sub_id = sub.id;
+    app_common::feed::check(
+        &sub_id,
+        feed,
+        &scheduler,
+        SqliteUpdatePersistence::new(db.clone(), sub_id)?,
+        sub.buffer_size as usize,
+    )
+    .try_for_each(async |(item, _)| {
+        let Some(item) = item else {
+            return Ok(());
+        };
+        let dialog_id = secure::generate_random_id(32);
+        event!(Level::INFO, "created dialog_id = {dialog_id}");
+        async {
+            let decider = LlmConditionMatcher::new(
+                model.clone(),
+                sub.condition.to_string(),
+                SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?,
+                FsDialogMemory::new(working_dir, &dialog_id),
+                SqliteCriteriaMemory::new(db.clone(), Some(sub_id)),
+            );
+            if !decider.get_truth_value(&item).await? {
+                return Ok(());
             }
 
-            match feed.get_metadata().await {
-                Ok(meta) => {
-                    yield format!(
-                        "Your subscription to \"{}\" ({}) has an update! Check it out!\n{}",
-                        meta.name,
-                        feed_url,
-                        title.unwrap_or_default()
-                    ).trim_end().to_string();
-                },
+            let msg = match feed.get_metadata().await {
+                Ok(meta) => format!(
+                    "Your subscription to \"{}\" ({}) has an update! Check it out!\n{}",
+                    meta.name,
+                    feed_url,
+                    item.to_string(),
+                )
+                .trim_end()
+                .to_string(),
                 Err(err) => {
                     event!(
                         Level::WARN,
                         "failed to fetch RSS feed metadata, falling back to URL only: {err}"
                     );
-                    yield format!(
+                    format!(
                         "Your subscription to {} has an update! Check it out!\n{}",
                         feed_url,
-                        title.unwrap_or_default()
-                    ).trim_end().to_string();
+                        item.to_string(),
+                    )
+                    .trim_end()
+                    .to_string()
                 }
             };
+            let tg_msg = bot.send_message(UserId(sub.user_id as u64), msg).await?;
+            db::dialog::ActiveModel::builder()
+                .set_dialog_id(&dialog_id)
+                .set_msg_id(tg_msg.id.0)
+                .set_subscription_id(sub.id)
+                .insert(db)
+                .await
+                .inspect_err(|err| event!(Level::WARN, "failed to save dialog: {err}"))?;
+            Ok(())
         }
-        event!(Level::WARN, "updates is supposed to be infinite, but ended prematurely. sub_id = {sub_id}");
-    }
+        .instrument(info_span!("send_message", dialog_id = dialog_id))
+        .await
+    })
+    .await?;
+    event!(
+        Level::WARN,
+        "updates is supposed to be infinite, but ended prematurely. sub_id = {sub_id}"
+    );
+    Ok(())
 }
 
 async fn get_schedules(
@@ -687,5 +733,230 @@ async fn receive_rss_custom_headers(
         }
         Err(_) => todo!(),
     }
+    Ok(())
+}
+
+async fn receive_feedback_msg(
+    bot: Bot,
+    msg: Message,
+    db: DatabaseConnection,
+    dialog: MasterDialog,
+    working_dir: PathBuf,
+) -> anyhow::Result<()> {
+    let chat_id = msg.chat_id().unwrap();
+    if let Some(State::Feedingback { clareq }) = dialog.get().await? {
+        event!(Level::TRACE, "state = feedback");
+        if !clareq.empty().await {
+            event!(
+                Level::WARN,
+                "clarification request handler is not empty, ignoring"
+            );
+            return Ok(());
+        }
+        let Some(clarification) = msg.markdown_text() else {
+            bot.send_message(chat_id, "I do not understand your input. Sorry! Feel free to try again using a different one.").await?;
+            return Ok(());
+        };
+        if let Some(reply) = msg.reply_to_message() {
+            if let Some(quote) = reply.markdown_text() {
+                clareq
+                    .send(format!(
+                        "> {}\n{}",
+                        quote.replace("\n", "\n> "),
+                        clarification
+                    ))
+                    .await;
+            } else {
+                clareq.send(clarification).await;
+            }
+        } else {
+            clareq.send(clarification).await;
+        }
+    } else {
+        event!(Level::TRACE, "state = start");
+        if let Some(reply) = msg.reply_to_message() {
+            let Some((model, Some(sub))) = db::dialog::Entity::find()
+                .filter(db::dialog::Column::MsgId.eq(reply.id.0))
+                .find_also_related(db::subscription::Entity)
+                .one(&db)
+                .await?
+            else {
+                bot.send_message(
+                    msg.chat_id().unwrap(),
+                    "There's nothing I can do with that message. Sorry!",
+                )
+                .await?;
+                return Ok(());
+            };
+            let cf_handler = clarify::TgClarReqHandler::new(bot.clone(), chat_id);
+            let optimizer = Arc::new(Gemma4Optimizer::new(
+                llm::DEFAULT_MODEL.clone(),
+                FsDialogMemory::<gemma4::Dialog>::new(working_dir, model.dialog_id),
+                SqliteCriteriaMemory::new(db.clone(), Some(model.subscription_id)),
+                cf_handler.clone(),
+                sub,
+            ));
+            if let Some(optimization) = optimizer.optimize_inplace(msg.text()).await? {
+                dialog
+                    .update(State::Feedingback {
+                        clareq: cf_handler.clone(),
+                    })
+                    .await?;
+                tokio::spawn(handle_optimization(
+                    optimization,
+                    cf_handler,
+                    bot,
+                    chat_id,
+                    dialog,
+                ));
+            } else {
+                bot.send_message(chat_id, "I don't know how to help with that, cause I forgot about the conversation. Sorry!").await?;
+            }
+        } else {
+            bot.send_message(
+                chat_id,
+                concat!(
+                    "I don't know what to help you with. ",
+                    "Please reply to a message of mine so that we can get started."
+                ),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn approve_or_deny_optimization(
+    bot: Bot,
+    query: CallbackQuery,
+    (_, approve, _): (
+        clarify::TgClarReqHandler,
+        mpsc::Sender<ApproveOrDeny>,
+        MessageId,
+    ), // State::ReviewingOptimization
+) -> anyhow::Result<()> {
+    let chat_id = query.chat_id().unwrap();
+    let Some(data) = query.data.as_ref() else {
+        bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
+        return Ok(());
+    };
+    match data.as_str() {
+        "y" => {
+            repmark::remove(&query, &bot).await;
+            approve.send(ApproveOrDeny::Approve).await?;
+        }
+        "n" => {
+            repmark::remove(&query, &bot).await;
+            approve.send(ApproveOrDeny::Deny { reason: None }).await?;
+        }
+        _ => {
+            bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn deny_optimization_with_reason(
+    bot: Bot,
+    msg: Message,
+    (_, approve, prompt): (
+        clarify::TgClarReqHandler,
+        mpsc::Sender<ApproveOrDeny>,
+        MessageId,
+    ), // State::ReviewingOptimization
+) -> anyhow::Result<()> {
+    if let Some(reason) = msg.markdown_text() {
+        event!(Level::TRACE, "reason = {reason}");
+        _ = bot
+            .edit_message_reply_markup(msg.chat_id().unwrap(), prompt)
+            .reply_markup(InlineKeyboardMarkup::default())
+            .await
+            .inspect_err(|err| event!(Level::WARN, "error removing reply markup: {err}"));
+        approve
+            .send(ApproveOrDeny::Deny {
+                reason: Some(reason),
+            })
+            .await?;
+    } else {
+        event!(Level::TRACE, "empty text message");
+        bot.send_message(
+            msg.chat_id().unwrap(),
+            "I do not understand your input. Feel free to try again anytime",
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn reject_clarification(
+    bot: Bot,
+    query: CallbackQuery,
+    clareq: clarify::TgClarReqHandler,
+) -> anyhow::Result<()> {
+    event!(Level::TRACE, "data = {:?}", query.data);
+    let Some(data) = query.data.as_ref() else {
+        bot.send_message(query.chat_id().unwrap(), EMPTY_MESSAGE_RESPONSE)
+            .await?;
+        return Ok(());
+    };
+    if data.as_str() == "n" {
+        clareq.reject().await;
+    } else {
+        bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn handle_optimization<Error>(
+    mut optimization: OptimizationCallback<Error>,
+    cf_handler: clarify::TgClarReqHandler,
+    bot: Bot,
+    chat_id: ChatId,
+    dialog: MasterDialog,
+) -> anyhow::Result<()>
+where
+    Error: std::error::Error + Send + Sync + 'static,
+{
+    bot.send_message(chat_id, "Working on it...").await?;
+    while let Some((action, approve)) = optimization
+        .accept()
+        .await
+        .context("optimization channel closed")?
+    {
+        let prompt = match action {
+            OptimizerAction::ContextPrefill(context) => bot.send_message(
+                chat_id,
+                if context.len() == 1 {
+                    format!(
+                        "I would like to add a filtering criterion:\n{}",
+                        context.first().unwrap()
+                    )
+                } else {
+                    format!(
+                        "I would like to add filtering criteria:\n- {}",
+                        context.join("\n- ")
+                    )
+                },
+            ),
+            OptimizerAction::Schedule(schedule) => {
+                bot.send_message(chat_id, format!("Better to reschedule this as {schedule}"))
+            }
+        }
+        .reply_markup(repmark::button_repmark([vec![
+            ("Approve", "y"),
+            ("Deny", "n"),
+        ]]))
+        .await?;
+        dialog
+            .update(State::ReviewingOptimization {
+                clareq: cf_handler.clone(),
+                approve,
+                prompt: prompt.id,
+            })
+            .await?;
+    }
+    dialog.update(State::Start).await?;
+    event!(Level::DEBUG, "reset dialog after multi-turn LLM");
     Ok(())
 }

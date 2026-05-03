@@ -11,7 +11,7 @@ pub struct Model {
     pub kind: Kind,
     pub shasum: String,
     #[sea_orm(has_many)]
-    pub decisions: HasMany<super::decision::Entity>,
+    pub decisions: HasMany<super::sqlite::Entity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]

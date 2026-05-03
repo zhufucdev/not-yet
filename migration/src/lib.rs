@@ -7,6 +7,8 @@ mod m20260404_171109_add_bot_db_sub_kind;
 mod m20260404_171549_create_bot_db_atom_table;
 mod m20260405_071428_add_bot_db_sub_buffer_size;
 mod m20260414_034251_drop_update_key_unique_constraint;
+mod m20260501_112246_add_criteria_mem_table;
+mod m20260501_134800_add_bot_db_msg_id_by_dialog_id;
 
 pub struct Migrator;
 
@@ -25,6 +27,9 @@ impl MigratorTrait for Migrator {
             #[cfg(feature = "bot")]
             Box::new(m20260405_071428_add_bot_db_sub_buffer_size::Migration),
             Box::new(m20260414_034251_drop_update_key_unique_constraint::Migration),
+            Box::new(m20260501_112246_add_criteria_mem_table::Migration),
+            #[cfg(feature = "bot")]
+            Box::new(m20260501_134800_add_bot_db_msg_id_by_dialog_id::Migration),
         ]
     }
 }

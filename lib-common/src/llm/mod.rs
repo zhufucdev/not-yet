@@ -1,14 +1,28 @@
 use std::sync::Arc;
 
+use crate::serde_utils::DynImageConverter;
+use llama_runner::{ImageOrText, MessageRole};
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use smol_str::{SmolStr, ToSmolStr};
 
+pub mod async_runner;
+mod default;
+pub mod dialog;
 pub mod owned;
 pub mod timeout;
 
-#[derive(Clone)]
+pub use default::DEFAULT_MODEL;
+
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SharedImageOrText {
-    Image(Arc<image::DynamicImage>),
+    Image(#[serde_as(as = "Arc<DynImageConverter>")] Arc<image::DynamicImage>),
     Text(SmolStr),
+}
+
+pub trait AsBorrowedMessages {
+    fn as_ref_msg<'s>(&'s self) -> Vec<(MessageRole, ImageOrText<'s>)>;
 }
 
 #[trait_variant::make(Send)]
@@ -16,6 +30,14 @@ pub trait Model {
     type Runner;
     type Error;
     async fn get_runner(&self) -> Result<Arc<Self::Runner>, Self::Error>;
+}
+
+impl AsBorrowedMessages for [(MessageRole, SharedImageOrText)] {
+    fn as_ref_msg<'s>(&'s self) -> Vec<(MessageRole, ImageOrText<'s>)> {
+        self.iter()
+            .map(|m| (m.0.clone(), (&m.1).into()))
+            .collect::<Vec<_>>()
+    }
 }
 
 impl From<SmolStr> for SharedImageOrText {

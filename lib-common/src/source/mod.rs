@@ -10,13 +10,14 @@ pub mod utils;
 
 pub use rss::{LlmRssItem, RssFeed};
 
-use crate::{agent::memory::sqlite::material, llm::SharedImageOrText, update::Updatable};
+use crate::{agent::memory::decision::material, llm::SharedImageOrText, update::Updatable};
 
 pub trait LlmComprehendable {
     const KIND: Option<material::Kind> = None;
     fn get_message(&self) -> Vec<SharedImageOrText>;
 }
 
+#[derive(Debug, Clone)]
 pub struct DefaultUpdate {
     pub title: String,
     images: Vec<Arc<image::DynamicImage>>,
@@ -31,10 +32,7 @@ pub struct DefaultMetadata {
 }
 
 #[trait_variant::make(Send)]
-pub trait Feed: Updatable
-where
-    <Self as Updatable>::Item: LlmComprehendable,
-{
+pub trait Feed: Updatable {
     type Metadata: LlmComprehendable;
 
     async fn get_metadata(&self) -> Result<Self::Metadata, <Self as Updatable>::Error>;

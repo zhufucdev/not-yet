@@ -15,4 +15,3 @@ use priority_authenticator::impl_priority_authenticators;
 pub struct PriorityAuthenticator<T>(T);
 // Generates Authenticator impls for arities 2–8. Raise the ceiling as needed.
 impl_priority_authenticators!(2);
-

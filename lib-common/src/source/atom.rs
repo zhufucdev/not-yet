@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tracing::{Instrument, Level, debug_span, event};
 
 use crate::{
-    agent::memory::sqlite::material,
+    agent::memory::decision::material,
     llm::SharedImageOrText,
     source::{
         DefaultMetadata, Feed, LlmComprehendable,

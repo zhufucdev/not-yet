@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<prompt>
+  <p>{user_prompt}</p>
+  <p>Now your task is to provide suggestions on how to improve future judgements. Please utilize your function calling capability. It's ok if you don't have concrete actions, and please ask for further clarification.</p>
+</prompt>

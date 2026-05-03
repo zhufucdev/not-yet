@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use async_stream::try_stream;
 use futures::{Stream, TryStreamExt};
@@ -7,16 +7,16 @@ use llama_runner::{
     template::ChatTemplate,
 };
 
-use crate::{agent::template::AsBorrowedMessages, llm::SharedImageOrText};
+use crate::llm::{AsBorrowedMessages, SharedImageOrText};
 
 pub trait RunnerAsyncExt<Tmpl: ChatTemplate> {
     fn stream_vlm_response_async(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         req: GenericRunnerRequest<SharedImageOrText, Tmpl>,
     ) -> impl Stream<Item = Result<String, GenericRunnerError<Tmpl::Error>>>;
 
     async fn get_vlm_response_async(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         req: GenericRunnerRequest<SharedImageOrText, Tmpl>,
     ) -> Result<String, GenericRunnerError<Tmpl::Error>>;
 }
@@ -24,26 +24,26 @@ pub trait RunnerAsyncExt<Tmpl: ChatTemplate> {
 impl<T, Tmpl> RunnerAsyncExt<Tmpl> for T
 where
     for<'r, 'req> T: VisionLmRunner<'r, 'req, Tmpl> + 'static,
-    Tmpl: ChatTemplate + Send + 'static,
+    Tmpl: ChatTemplate + Send + Clone + 'static,
     Tmpl::Error: Send,
 {
     fn stream_vlm_response_async(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         req: GenericRunnerRequest<SharedImageOrText, Tmpl>,
     ) -> impl Stream<Item = Result<String, GenericRunnerError<Tmpl::Error>>> {
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let task = {
-            let this: UnsafeBox<Arc<T>> = UnsafeBox(self.clone());
+            let this = UnsafeBox(self.clone());
+            let req = UnsafeBox(req);
             tokio::spawn(async move {
-                let mut iter =
-                    UnsafeBox(this.as_ref().stream_vlm_response(GenericVisionLmRequest {
-                        messages: req.messages.as_ref_msg(),
-                        sampling: req.sampling,
-                        llguidance: req.llguidance,
-                        max_seq: req.max_seq,
-                        prefill: req.prefill,
-                        tmpl: req.tmpl,
-                    }));
+                let mut iter = UnsafeBox(this.stream_vlm_response(GenericVisionLmRequest {
+                    messages: req.messages.as_ref_msg(),
+                    sampling: req.sampling.clone(),
+                    llguidance: req.llguidance.clone(),
+                    max_seq: req.max_seq,
+                    prefill: req.prefill.clone(),
+                    tmpl: req.tmpl.clone(),
+                }));
 
                 while let Some(result) = iter.as_mut().next() {
                     if let Err(_) = tx.send(result).await {
@@ -61,7 +61,7 @@ where
     }
 
     async fn get_vlm_response_async(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         req: GenericRunnerRequest<SharedImageOrText, Tmpl>,
     ) -> Result<String, GenericRunnerError<Tmpl::Error>>
     where
@@ -80,8 +80,34 @@ impl<T> AsMut<T> for UnsafeBox<T> {
     }
 }
 
-impl<T> AsRef<T> for UnsafeBox<T> {
-    fn as_ref(&self) -> &T {
+impl<T> Deref for UnsafeBox<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use llama_runner::{Gemma4VisionRunner, MessageRole, mcp::Gemma4ChatTemplate};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_async_runner() {
+        let runner = Arc::new(Gemma4VisionRunner::default().await.unwrap());
+        let response = runner
+            .get_vlm_response_async(GenericRunnerRequest {
+                messages: vec![(
+                    MessageRole::User,
+                    SharedImageOrText::Text("What is the capital of France?".into()),
+                )],
+                tmpl: Gemma4ChatTemplate::default(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(response.contains("Paris"));
     }
 }
