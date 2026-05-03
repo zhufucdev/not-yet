@@ -1,4 +1,4 @@
-use crate::agent::memory::dialog::DialogMemory;
+use crate::{agent::memory::dialog::DialogMemory, error::NaE};
 
 pub struct DebugDialogMemory<D> {
     mem: Option<D>,
@@ -21,7 +21,7 @@ where
     D: Clone + Send + Sync,
 {
     type Dialog = D;
-    type Error = ();
+    type Error = NaE;
 
     async fn update(&mut self, dialog: &Self::Dialog) -> Result<(), Self::Error> {
         self.mem = Some(dialog.clone());

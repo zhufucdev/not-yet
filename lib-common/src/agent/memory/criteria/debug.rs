@@ -1,3 +1,5 @@
+use crate::error::NaE;
+
 pub struct DebugCriteriaMemory {
     criteria: Vec<String>,
 }
@@ -17,7 +19,7 @@ impl Default for DebugCriteriaMemory {
 }
 
 impl super::CriteriaMemory for DebugCriteriaMemory {
-    type Error = ();
+    type Error = NaE;
 
     async fn get(&self) -> Result<Vec<impl AsRef<str> + Send>, Self::Error> {
         Ok(self.criteria.iter().map(|c| c.as_str()).collect())

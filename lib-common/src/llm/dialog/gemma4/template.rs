@@ -1,4 +1,7 @@
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    sync::{Arc, RwLock},
+};
 
 use llama_cpp_2::model::{LlamaChatTemplate, LlamaModel};
 use llama_runner::{
@@ -15,7 +18,7 @@ use crate::llm::dialog::gemma4::{DialogTurn, ROLE_TOOL};
 pub struct DialogTemplate {
     env: minijinja::Environment<'static>,
     message: DialogTurn,
-    history: RefCell<Vec<minijinja::Value>>,
+    pub(super) history: Arc<RwLock<Vec<minijinja::Value>>>,
 }
 
 impl DialogTemplate {
@@ -38,7 +41,7 @@ impl DialogTemplate {
         Self {
             env,
             message,
-            history: RefCell::new(history.into_iter().collect()),
+            history: Arc::new(RwLock::new(history.into_iter().collect())),
         }
     }
 }
@@ -56,43 +59,51 @@ impl ChatTemplate for DialogTemplate {
             .env
             .template_from_str(model_tmpl.to_str()?)
             .map_err(JinjaTemplateError::Parse)?;
-        self.history
-            .borrow_mut()
-            .extend(messages.iter().map(|(role, cnt)| {
-                match role {
-                    MessageRole::User | MessageRole::System => {
-                        [("role", role.to_string()), ("content", cnt.clone())]
-                            .into_iter()
-                            .collect()
-                    }
-                    MessageRole::Custom(ROLE_TOOL) => {
-                        let DialogTurn::ToolResponses(res) = &self.message else {
-                            panic!("tool message is not tool turn")
-                        };
-                        [
-                            ("role", ROLE_TOOL.into()),
-                            (
-                                "tool_responses",
-                                res.iter()
-                                    .map(minijinja::Value::from_serialize)
-                                    .collect::<minijinja::Value>(),
-                            ),
-                        ]
-                        .into_iter()
-                        .collect()
-                    }
-                    MessageRole::Custom(_) => panic!("unsupported role"),
-                    MessageRole::Assistant => {
-                        let DialogTurn::Assistant(res) = &self.message else {
-                            panic!("assistant message is not assistant turn")
-                        };
-                        res.into()
-                    }
-                }
-            }));
+        messages.iter().for_each(|(role, cnt)| match role {
+            MessageRole::User | MessageRole::System => {
+                self.history
+                    .write()
+                    .unwrap()
+                    .push(minijinja::Value::from_iter([
+                        ("role", role.to_string()),
+                        ("content", cnt.clone()),
+                    ]));
+            }
+            MessageRole::Custom(ROLE_TOOL) => {
+                let mut history = self.history.write().unwrap();
+                let Some(last) = history.last_mut() else {
+                    panic!("tool response following nothing")
+                };
+                let DialogTurn::ToolResponses(res) = &self.message else {
+                    panic!("tool message is not tool turn")
+                };
+                *last = last
+                    .as_object()
+                    .unwrap()
+                    .try_iter_pairs()
+                    .unwrap()
+                    .chain(
+                        [(
+                            "tool_responses".into(),
+                            res.iter()
+                                .map(minijinja::Value::from_serialize)
+                                .collect::<minijinja::Value>(),
+                        )]
+                        .into_iter(),
+                    )
+                    .collect();
+            }
+            MessageRole::Custom(_) => panic!("unsupported role"),
+            MessageRole::Assistant => {
+                let DialogTurn::Assistant(res) = &self.message else {
+                    panic!("assistant message is not assistant turn")
+                };
+                self.history.write().unwrap().push(res.into());
+            }
+        });
 
         let render = template
-            .render(context! { messages => self.history.borrow().as_slice(), add_generation_prompt => true })
+            .render(context! { messages => self.history.read().unwrap().as_slice(), add_generation_prompt => true })
             .map_err(JinjaTemplateError::Render)?;
         Ok(render)
     }

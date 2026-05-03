@@ -1,6 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{Debug, Display},
+    ops::Add,
     sync::Arc,
 };
 
@@ -11,7 +12,6 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use smol_str::ToSmolStr;
 use thiserror::Error;
 use tokio::sync::{RwLock, mpsc};
 
@@ -38,9 +38,14 @@ pub struct Gemma4Optimizer<Model, DiaMem, CriMem, ClarHandler, Schedule> {
     criteria_memory: Arc<RwLock<CriMem>>,
     clarification_handler: Arc<ClarHandler>,
     schedule: Schedule,
-    checked_interval: Arc<RwLock<bool>>,
-    checked_buffer_size: Arc<RwLock<bool>>,
-    checked_criteria: Arc<RwLock<bool>>,
+    state: Arc<RwLock<State>>,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    checked: HashSet<ToolcallKind>,
+    retrival_rejected: HashSet<ToolcallKind>,
+    actions_count: u32,
 }
 
 #[trait_variant::make(Send)]
@@ -74,9 +79,7 @@ where
             criteria_memory: Arc::new(RwLock::new(criteria_memory.into())),
             clarification_handler: Arc::new(clarification_handler.into()),
             schedule: schedule.into(),
-            checked_interval: Arc::new(RwLock::new(false)),
-            checked_buffer_size: Arc::new(RwLock::new(false)),
-            checked_criteria: Arc::new(RwLock::new(false)),
+            state: Arc::new(RwLock::new(Default::default())),
         }
     }
 }
@@ -99,16 +102,26 @@ where
             (
                 Tool::new(
                     "set_polling_interval",
-                    "if the user complain about update frequencies, you can change the polling intervals and / or max buffer size",
+                    "if the user complain about update frequencies, you can change the polling intervals and / or max buffer size. must retrive the current value first",
                     schema_for_type::<SetPollingInterInputParams>(),
                 ),
                 gemma4::ToolHandler::new(|args| {
                     let action = action.clone();
-                    let checked_interval = self.checked_interval.clone();
+                    let state = self.state.clone();
                     async move {
-                        if !checked_interval.read().await.clone() {
+                        if !state
+                            .read()
+                            .await
+                            .checked
+                            .contains(&ToolcallKind::PollingInterval)
+                        {
+                            state
+                                .write()
+                                .await
+                                .retrival_rejected
+                                .insert(ToolcallKind::PollingInterval);
                             return Ok(gemma4::ToolResult::Failure(
-                                "you must check the polling interval before changing it",
+                                "you must check the polling interval before changing it. please use the `get_polling_interval` tool first",
                             )
                             .into());
                         }
@@ -131,6 +144,7 @@ where
                             .map_err(|_| ToolHandlerError::ChannelClosed)?;
                         match rx.recv().await {
                             Some(ApproveOrDeny::Approve) => {
+                                state.write().await.actions_count += 1;
                                 Ok(format!("the new interval is {new_value} minutes.").into())
                             }
                             Some(ApproveOrDeny::Deny { reason }) => {
@@ -148,23 +162,42 @@ where
                     schema_for_type::<EmptyObject>(),
                 ),
                 gemma4::ToolHandler::new(async |_| {
-                    *self.checked_interval.write().await = true;
+                    self.state
+                        .write()
+                        .await
+                        .checked
+                        .insert(ToolcallKind::PollingInterval);
+                    self.state
+                        .write()
+                        .await
+                        .retrival_rejected
+                        .remove(&ToolcallKind::PollingInterval);
                     Ok(self.schedule.get_interval_mins().await.into())
                 }),
             ),
             (
                 Tool::new(
                     "set_buffer_size",
-                    "a buffer is where polled updates are staged, discarding overflowing ones. A smaller buffer would suit rapid-changing feeds, while a bigger one preserves more details",
+                    "a buffer is where polled updates are staged, discarding overflowing ones. A smaller buffer would suit rapid-changing feeds, while a bigger one preserves more details. must retrive the current value first",
                     schema_for_type::<SetBufferSizeInputParams>(),
                 ),
                 gemma4::ToolHandler::new(|args| {
-                    let checked_buffer_size = self.checked_buffer_size.clone();
                     let action = action.clone();
+                    let state = self.state.clone();
                     async move {
-                        if !checked_buffer_size.read().await.clone() {
+                        if !state
+                            .read()
+                            .await
+                            .checked
+                            .contains(&ToolcallKind::BufferSize)
+                        {
+                            state
+                                .write()
+                                .await
+                                .retrival_rejected
+                                .insert(ToolcallKind::BufferSize);
                             return Ok(gemma4::ToolResult::Failure(
-                                "you must check the buffer size before changing it",
+                                "you must check the buffer size before changing it. please use the `get_buffer_size` tool first",
                             )
                             .into());
                         }
@@ -187,6 +220,7 @@ where
                             .await?;
                         match rx.recv().await {
                             Some(ApproveOrDeny::Approve) => {
+                                state.write().await.actions_count += 1;
                                 Ok(format!("the new buffer size is {new_value}").into())
                             }
                             Some(ApproveOrDeny::Deny { reason }) => {
@@ -204,24 +238,38 @@ where
                     schema_for_type::<EmptyObject>(),
                 ),
                 gemma4::ToolHandler::new(async |_| {
-                    *self.checked_buffer_size.write().await = true;
+                    self.state
+                        .write()
+                        .await
+                        .checked
+                        .insert(ToolcallKind::BufferSize);
+                    self.state
+                        .write()
+                        .await
+                        .retrival_rejected
+                        .remove(&ToolcallKind::BufferSize);
                     Ok(self.schedule.get_buffer_size().await.into())
                 }),
             ),
             (
                 Tool::new(
-                    "update_criteria",
-                    "add reflections on this interaction, be it clarification on a definition, notes on user's preferences, or tips to improve judgemental accuracy in general; keep it brief and to the point",
+                    "add_criteria",
+                    "add reflections on this interaction, be it clarification on a definition, notes on user's preferences, or tips to improve judgemental accuracy in general; keep it brief and to the point. must retrive the current values first",
                     schema_for_type::<UpdateCriteriaInputParams>(),
                 ),
                 gemma4::ToolHandler::new(|args| {
-                    let checked_criterias = self.checked_criteria.clone();
                     let action = action.clone();
                     let criteria_memory = self.criteria_memory.clone();
+                    let state = self.state.clone();
                     async move {
-                        if !checked_criterias.read().await.clone() {
+                        if !state.read().await.checked.contains(&ToolcallKind::Criteria) {
+                            state
+                                .write()
+                                .await
+                                .retrival_rejected
+                                .insert(ToolcallKind::Criteria);
                             return Ok(gemma4::ToolResult::Failure(
-                                "you must check the criteria list before adding one",
+                                "you must check the criteria list before changing it. please use the `get_criteria` tool first",
                             )
                             .into());
                         }
@@ -240,6 +288,7 @@ where
                                 if let Err(err) = criteria_memory.write().await.add(content).await {
                                     Ok(gemma4::ToolResult::Failure(err.to_string().as_str()).into())
                                 } else {
+                                    state.write().await.actions_count += 1;
                                     Ok("criterion added".into())
                                 }
                             }
@@ -253,12 +302,21 @@ where
             ),
             (
                 Tool::new(
-                    "recall_criteria",
+                    "get_criteria",
                     "retrive a list of criteria previously remembered",
                     schema_for_type::<EmptyObject>(),
                 ),
                 gemma4::ToolHandler::new(async |_| {
-                    *self.checked_criteria.write().await = true;
+                    self.state
+                        .write()
+                        .await
+                        .checked
+                        .insert(ToolcallKind::Criteria);
+                    self.state
+                        .write()
+                        .await
+                        .retrival_rejected
+                        .remove(&ToolcallKind::Criteria);
                     let criteria = self.criteria_memory.read().await;
                     let criteria = match criteria.get().await {
                         Err(err) => {
@@ -316,6 +374,12 @@ where
         DiaMem::Error: Display + Debug,
     {
         if let Some(dialog) = self.dialog_memory.read().await.get().await? {
+            event!(
+                Level::DEBUG,
+                "read {} messages from dialog memory, amounting to {} turns",
+                dialog.history().len(),
+                dialog.turns().len()
+            );
             Ok(Some(self.optimize(prompt, &dialog)))
         } else {
             Ok(None)
@@ -370,42 +434,69 @@ where
                 },
             );
             let mut req = gemma4::DialogRequest::new(gemma4::DialogTurn::User(initial_prompt))
-                .with_tools(tools);
+                .with_tools(tools)
+                .enable_thinking();
             let runner = this.model.get_runner().await.map_err(Error::Model)?;
             loop {
                 let res = runner.get_dialog_continued(&req, &mut dialog).await?;
                 event!(Level::DEBUG, "model: {:#?}", res);
-                let tool_responses =
-                    future::try_join_all(res.tool_calls.into_iter().enumerate().map(
-                        async |(idx, tool_call)| {
-                            let Ok(tool_call) = tool_call else {
-                                let err = tool_call.unwrap_err();
-                                return Ok(gemma4::ToolResponse::new(
-                                    format!("unparsed function call {}", idx + 1),
-                                    err.to_string(), // renders the error *message* to model
-                                ));
-                            };
-                            toolcall::handle_tool_call(tool_call.into(), &handlers).await
-                        },
-                    ))
-                    .await?;
-                event!(Level::DEBUG, "tool responses: {:#?}", tool_responses);
-                this.dialog_memory
-                    .write()
-                    .await
-                    .update(&dialog)
-                    .await
-                    .inspect_err(|err| {
-                        event!(Level::WARN, "failed to update dialog memory: {err}")
-                    });
-                req.set_message(gemma4::DialogTurn::ToolResponses(tool_responses));
-
-                if !dialog.turns().last().is_some_and(|turn| match turn {
-                    gemma4::DialogTurn::Assistant(res) => res.tool_calls.is_empty(),
-                    _ => false,
-                }) {
-                    event!(Level::DEBUG, "optimization finished");
-                    break;
+                if !res.tool_calls.is_empty() {
+                    let tool_responses =
+                        future::try_join_all(res.tool_calls.into_iter().enumerate().map(
+                            async |(idx, tool_call)| {
+                                let Ok(tool_call) = tool_call else {
+                                    let err = tool_call.unwrap_err();
+                                    return Ok(gemma4::ToolResponse::new(
+                                        format!("unparsed function call {}", idx + 1),
+                                        err.to_string(), // renders the error *message* to model
+                                    ));
+                                };
+                                toolcall::handle_tool_call(tool_call.into(), &handlers).await
+                            },
+                        ))
+                        .await?;
+                    event!(Level::DEBUG, "tool responses: {:#?}", tool_responses);
+                    _ = this
+                        .dialog_memory
+                        .write()
+                        .await
+                        .update(&dialog)
+                        .await
+                        .inspect_err(|err| {
+                            event!(Level::WARN, "failed to update dialog memory: {err}")
+                        });
+                    req.set_message(gemma4::DialogTurn::ToolResponses(tool_responses));
+                } else if let Some(gemma4::DialogTurn::Assistant(res)) = dialog.turns().last()
+                    && res.tool_calls.is_empty()
+                {
+                    let state = this.state.read().await;
+                    let gave_up = res.content.to_lowercase().contains("give up");
+                    if state.retrival_rejected.is_empty() && state.actions_count > 0 || gave_up {
+                        event!(Level::DEBUG, "optimization finished");
+                        event!(Level::TRACE, "history: {:#?}", dialog.history());
+                        break;
+                    } else if !state.retrival_rejected.is_empty() {
+                        let msg = format!(
+                            concat!(
+                                "System: there {} {} error{} to be resolved. Presumably you did not finish your tasks well. ",
+                                "Please try again. However, if this is intentional, respond with `give up`"
+                            ),
+                            if state.retrival_rejected.len() == 1 {
+                                "is"
+                            } else {
+                                "are"
+                            },
+                            state.retrival_rejected.len(),
+                            if state.retrival_rejected.len() == 1 {
+                                ""
+                            } else {
+                                "s"
+                            },
+                        );
+                        req.set_message(gemma4::DialogTurn::User(vec![msg.into()]));
+                    } else {
+                        req.set_message(gemma4::DialogTurn::User(vec!["System: though there're no errors, you have effectively taken no actions (no settings changed). Please try again. If intentional, respond with `give up`. If confused, use `request_clarification` for human intervension".into()]));
+                    }
                 }
             }
             Ok(())
@@ -472,4 +563,11 @@ impl<T> From<mpsc::error::SendError<T>> for ToolHandlerError {
     fn from(_value: mpsc::error::SendError<T>) -> Self {
         Self::ChannelClosed
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ToolcallKind {
+    Criteria,
+    PollingInterval,
+    BufferSize,
 }

@@ -10,8 +10,8 @@ pub struct ToolCall {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolResponse {
-    name: String,
-    response: minijinja::Value,
+    pub name: String,
+    pub response: minijinja::Value,
 }
 
 pub type ToolHandler<'a, Error> =

@@ -48,3 +48,6 @@ schemars = "*"
 [features]
 cuda = ["llama-runner/cuda"]
 metal = ["llama-runner/metal"]
+
+[dev-dependencies]
+ntest = "0.9.5"

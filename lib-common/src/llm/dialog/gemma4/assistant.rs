@@ -14,11 +14,12 @@ impl Into<minijinja::Value> for &AssistantResponse {
     fn into(self) -> minijinja::Value {
         [
             (
-                "tool_cals",
+                "tool_calls",
                 self.tool_calls
                     .iter()
                     .filter_map(|call| call.as_ref().ok())
                     .map(minijinja::Value::from_serialize)
+                    .map(|tk| minijinja::Value::from_iter([("function".to_string(), tk)]))
                     .collect::<minijinja::Value>(),
             ),
             ("content", self.content.clone().into()),

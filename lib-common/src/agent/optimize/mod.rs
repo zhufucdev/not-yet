@@ -4,6 +4,8 @@ use crate::llm::SharedImageOrText;
 use tokio::sync::mpsc;
 
 pub mod gemma4;
+#[cfg(test)]
+mod test;
 
 /// Analyze agents' actions to get
 /// what to prefill the context window with
@@ -24,7 +26,7 @@ pub enum OptimizerAction {
     Schedule(ScheduleParamters),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApproveOrDeny {
     Approve,
     Deny { reason: Option<String> },

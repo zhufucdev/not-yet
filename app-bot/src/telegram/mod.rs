@@ -323,48 +323,53 @@ where
             return Ok(());
         };
         let dialog_id = secure::generate_random_id(32);
-        let decider = LlmConditionMatcher::new(
-            model.clone(),
-            sub.condition.to_string(),
-            SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?,
-            FsDialogMemory::new(working_dir, &dialog_id),
-        );
-        if !decider.get_truth_value(&item).await? {
-            return Ok(());
-        }
+        event!(Level::INFO, "created dialog_id = {dialog_id}");
+        async {
+            let decider = LlmConditionMatcher::new(
+                model.clone(),
+                sub.condition.to_string(),
+                SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?,
+                FsDialogMemory::new(working_dir, &dialog_id),
+            );
+            if !decider.get_truth_value(&item).await? {
+                return Ok(());
+            }
 
-        let msg = match feed.get_metadata().await {
-            Ok(meta) => format!(
-                "Your subscription to \"{}\" ({}) has an update! Check it out!\n{}",
-                meta.name,
-                feed_url,
-                item.to_string(),
-            )
-            .trim_end()
-            .to_string(),
-            Err(err) => {
-                event!(
-                    Level::WARN,
-                    "failed to fetch RSS feed metadata, falling back to URL only: {err}"
-                );
-                format!(
-                    "Your subscription to {} has an update! Check it out!\n{}",
+            let msg = match feed.get_metadata().await {
+                Ok(meta) => format!(
+                    "Your subscription to \"{}\" ({}) has an update! Check it out!\n{}",
+                    meta.name,
                     feed_url,
                     item.to_string(),
                 )
                 .trim_end()
-                .to_string()
-            }
-        };
-        let tg_msg = bot.send_message(UserId(sub.user_id as u64), msg).await?;
-        db::dialog::ActiveModel::builder()
-            .set_dialog_id(dialog_id)
-            .set_msg_id(tg_msg.id.0)
-            .set_subscription_id(sub.id)
-            .insert(db)
-            .await
-            .inspect_err(|err| event!(Level::WARN, "failed to save dialog: {err}"))?;
-        Ok(())
+                .to_string(),
+                Err(err) => {
+                    event!(
+                        Level::WARN,
+                        "failed to fetch RSS feed metadata, falling back to URL only: {err}"
+                    );
+                    format!(
+                        "Your subscription to {} has an update! Check it out!\n{}",
+                        feed_url,
+                        item.to_string(),
+                    )
+                    .trim_end()
+                    .to_string()
+                }
+            };
+            let tg_msg = bot.send_message(UserId(sub.user_id as u64), msg).await?;
+            db::dialog::ActiveModel::builder()
+                .set_dialog_id(&dialog_id)
+                .set_msg_id(tg_msg.id.0)
+                .set_subscription_id(sub.id)
+                .insert(db)
+                .await
+                .inspect_err(|err| event!(Level::WARN, "failed to save dialog: {err}"))?;
+            Ok(())
+        }
+        .instrument(info_span!("send_message", dialog_id = dialog_id))
+        .await
     })
     .await?;
     event!(

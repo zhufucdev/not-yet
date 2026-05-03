@@ -41,7 +41,7 @@ where
         req: &'d Self::Request,
         dialog: &'d mut MultiTurnDialog<Self::Turn, Self::History>,
     ) -> Result<Self::Response, Self::Error> {
-        event!(Level::DEBUG, "{req:?}");
+        event!(Level::TRACE, "req: {req:#?}");
         let new_messages = match req.get_message() {
             DialogTurn::System(msg) => msg
                 .into_iter()
@@ -66,6 +66,7 @@ where
             req.get_message().clone(),
             dialog.history().clone(),
         );
+        let tmpl_history = tmpl.history.clone();
         let res = self
             .get_vlm_response_async(GenericRunnerRequest {
                 tmpl: tmpl,
@@ -76,9 +77,11 @@ where
                 prefill: req.get_prefill().cloned(),
             })
             .await?;
+        event!(Level::TRACE, "res: {res:?}");
         dialog.turns.push(req.get_message().clone());
         let res_turn = parse::gemmma4::assistant_response(res);
         dialog.turns.push(DialogTurn::Assistant(res_turn.clone()));
+        dialog.history = tmpl_history.read().unwrap().clone();
         dialog.history.push((&res_turn).into());
         Ok(res_turn)
     }

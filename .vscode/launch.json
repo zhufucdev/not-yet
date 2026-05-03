@@ -6,7 +6,10 @@
       "request": "launch",
       "name": "Launch Main",
       "program": "${workspaceFolder}/../builds/debug/not_yet",
-      "args": ["-vvvv"]
+      "args": ["-vvvv"],
+      "env": {
+        "RUST_LOG": "lib_common=debug"
+      }
     }
   ]
 }
