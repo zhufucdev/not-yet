@@ -1,4 +1,3 @@
-#[cfg(test)]
 pub mod debug;
 pub mod sqlite;
 

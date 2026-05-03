@@ -27,7 +27,14 @@ use crate::{
     config::{Config, RssConfig, RunMode, Subscription, ToFeed},
 };
 use lib_common::{
-    agent::{LlmConditionMatcher, memory::decision::SqliteDecisionMemory},
+    agent::{
+        Decider, LlmConditionMatcher,
+        memory::{
+            criteria::debug::DebugCriteriaMemory,
+            decision::SqliteDecisionMemory,
+            dialog::{debug::DebugDialogMemory, fs::FsDialogMemory},
+        },
+    },
     llm::timeout::{ModelProducer, TimedModel},
     polling::{self, Scheduler, trigger::ScheduleTrigger},
     source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed},
@@ -179,7 +186,7 @@ async fn oneshot<Feed_>(
 ) -> anyhow::Result<()>
 where
     Feed_: Feed + Send + Sync + 'static,
-    Feed_::Item: LlmComprehendable + Hash + Display + Serialize + DeserializeOwned,
+    Feed_::Item: LlmComprehendable + Clone + Hash + Display + Serialize + DeserializeOwned,
     Feed_::Error: Display,
 {
     let _sc = scheduler
@@ -189,15 +196,19 @@ where
         model.clone(),
         &sub.condition,
         SqliteDecisionMemory::new(db.clone(), &data_path, None)?,
+        DebugDialogMemory::new(),
+        DebugCriteriaMemory::new(),
     );
     let persistence = AcceptUpdatePersistence::new();
     // TODO:oneshot should return immediately when there is no new update
-    let updates =
-        app_common::feed::check(sub, &feed, &decider, &scheduler, persistence, buffer_size);
+    let updates = app_common::feed::check(sub, &feed, &scheduler, persistence, buffer_size);
     pin_mut!(updates);
     let mut stdout_guard = stdout().lock();
     if let Some(result) = updates.next().await {
-        let (_, task, is_truthy) = result?;
+        let (Some(update), task) = result? else {
+            return Ok(());
+        };
+        let is_truthy = decider.get_truth_value(&update).await?;
         event!(
             Level::INFO,
             "schedule id = {}, is_truthy = {is_truthy}",
@@ -227,41 +238,43 @@ async fn daemon<Feed_>(
 ) -> anyhow::Result<()>
 where
     Feed_: Feed<Metadata = DefaultMetadata> + Send + Sync + 'static,
-    Feed_::Item: LlmComprehendable + Hash + Display + Serialize + DeserializeOwned,
+    Feed_::Item: LlmComprehendable + Clone + Hash + Display + Serialize + DeserializeOwned,
     Feed_::Error: Display,
 {
     let decider = LlmConditionMatcher::new(
         model.clone(),
         sub.condition.clone(),
         SqliteDecisionMemory::new(db.clone(), data_path.clone(), None)?,
+        DebugDialogMemory::new(),
+        DebugCriteriaMemory::new(),
     );
     let persistence = SqliteUpdatePersistence::new(db.clone(), {
         let mut hasher = DefaultHasher::new();
         sub.hash(&mut hasher);
         format!("{:x}", hasher.finish())
     })?;
-    let updates =
-        app_common::feed::check(sub, &feed, &decider, &scheduler, persistence, buffer_size);
+    let updates = app_common::feed::check(sub, &feed, &scheduler, persistence, buffer_size);
     pin_mut!(updates);
+    #[derive(Serialize)]
+    struct Message {
+        subscription_id: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        feed: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        item: Option<String>,
+    }
     while let Some(result) = updates.next().await {
         match result {
-            Ok((title, task, is_truthy)) => {
+            Ok((Some(update), task)) => {
+                let is_truthy = decider.get_truth_value(&update).await?;
                 let mut stdout_guard = stdout().lock();
                 if is_truthy {
-                    #[derive(Serialize)]
-                    struct Message {
-                        subscription_id: usize,
-                        #[serde(skip_serializing_if = "Option::is_none")]
-                        feed: Option<String>,
-                        #[serde(skip_serializing_if = "Option::is_none")]
-                        item: Option<String>,
-                    }
                     serde_json::to_writer(
                         &mut stdout_guard,
                         &Message {
                             subscription_id: sub_id,
                             feed: feed.get_metadata().await.ok().map(|m| m.name),
-                            item: title,
+                            item: Some(update.to_string()),
                         },
                     );
                 } else {
@@ -271,6 +284,17 @@ where
                         task.schedule().key()
                     );
                 }
+            }
+            Ok((None, _)) => {
+                let mut stdout_guard = stdout().lock();
+                serde_json::to_writer(
+                    &mut stdout_guard,
+                    &Message {
+                        subscription_id: sub_id,
+                        feed: feed.get_metadata().await.ok().map(|m| m.name),
+                        item: None,
+                    },
+                );
             }
             Err(err) => {
                 if let Ok(metadata) = feed.get_metadata().await {
