@@ -327,7 +327,8 @@ where
         let dialog_id = secure::generate_random_id(32);
         event!(Level::INFO, "created dialog_id = {dialog_id}");
         async {
-            let mut decision_mem = SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?;
+            let mut decision_mem =
+                SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?;
             let decider = LlmConditionMatcher::new(
                 model.clone(),
                 sub.condition.to_string(),
@@ -806,7 +807,7 @@ async fn receive_feedback_msg(
                 FsDialogMemory::<gemma4::Dialog>::new(working_dir, model.dialog_id),
                 SqliteCriteriaMemory::new(db.clone(), Some(model.subscription_id)),
                 cf_handler.clone(),
-                sub,
+                subscription::ModelParamterAccessor::new(db.clone(), sub),
             ));
             if let Some(optimization) = optimizer.optimize_inplace(msg.text()).await? {
                 dialog

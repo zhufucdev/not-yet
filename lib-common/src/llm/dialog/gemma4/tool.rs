@@ -18,11 +18,11 @@ pub type ToolHandler<'a, Error> =
     toolcall::ToolHandler<'a, serde_json::Map<String, serde_json::Value>, minijinja::Value, Error>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ToolResult<'s> {
+pub enum ToolResult<Value> {
     #[serde(rename = "success")]
-    Success(&'s str),
+    Success(Value),
     #[serde(rename = "failure")]
-    Failure(&'s str),
+    Failure(Value),
 }
 
 impl ToolResponse {
@@ -61,8 +61,24 @@ where
     }
 }
 
-impl Into<minijinja::Value> for ToolResult<'_> {
+impl<V> Into<minijinja::Value> for ToolResult<V>
+where
+    V: Serialize,
+{
     fn into(self) -> minijinja::Value {
         minijinja::Value::from_serialize(self)
+    }
+}
+
+impl<T, E> From<Result<T, E>> for ToolResult<minijinja::Value>
+where
+    T: Into<minijinja::Value>,
+    E: std::error::Error,
+{
+    fn from(value: Result<T, E>) -> Self {
+        match value {
+            Ok(v) => ToolResult::Success(v.into()),
+            Err(err) => ToolResult::Failure(err.to_string().into()),
+        }
     }
 }

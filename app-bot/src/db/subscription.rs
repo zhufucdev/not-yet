@@ -2,8 +2,7 @@ use std::time::Duration;
 
 use lib_common::agent::optimize::gemma4::ScheduleParamterAccessor;
 use lib_common::polling::trigger::ScheduleTrigger;
-use sea_orm::prelude::*;
-use sea_orm::strum::Display;
+use sea_orm::{prelude::*, strum};
 
 use crate::UserId;
 use crate::db::{atom, rss};
@@ -36,7 +35,7 @@ pub struct Model {
     pub atom: HasOne<atom::Entity>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Display)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, strum::Display)]
 #[sea_orm(rs_type = "i32", db_type = "Integer")]
 pub enum Kind {
     #[strum(to_string = "RSS")]
@@ -71,12 +70,49 @@ impl Model {
     }
 }
 
-impl ScheduleParamterAccessor for Model {
+pub struct ModelParamterAccessor {
+    inner: Model,
+    db: DatabaseConnection,
+}
+
+impl ModelParamterAccessor {
+    pub fn new(db: DatabaseConnection, inner: Model) -> Self {
+        Self { inner, db }
+    }
+}
+
+impl ScheduleParamterAccessor for ModelParamterAccessor {
+    type Error = DbErr;
+
     async fn get_interval_mins(&self) -> u32 {
-        self.interval_mins.unwrap_or(60) as u32
+        self.inner.interval_mins.unwrap_or(60) as u32
+    }
+
+    async fn set_interval_mins(&mut self, new_value: u32) -> Result<(), Self::Error> {
+        self.inner.interval_mins = Some(new_value as i32);
+        Entity::update(ActiveModel {
+            id: sea_orm::Unchanged(self.inner.id),
+            interval_mins: sea_orm::Set(Some(new_value as i32)),
+            ..Default::default()
+        })
+        .exec(&self.db)
+        .await?;
+        Ok(())
     }
 
     async fn get_buffer_size(&self) -> usize {
-        self.buffer_size as usize
+        self.inner.buffer_size as usize
+    }
+
+    async fn set_buffer_size(&mut self, new_value: usize) -> Result<(), Self::Error> {
+        self.inner.buffer_size = new_value as i32;
+        Entity::update(ActiveModel {
+            id: sea_orm::Unchanged(self.inner.id),
+            buffer_size: sea_orm::Set(new_value as i32),
+            ..Default::default()
+        })
+        .exec(&self.db)
+        .await?;
+        Ok(())
     }
 }

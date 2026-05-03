@@ -37,7 +37,7 @@ pub struct Gemma4Optimizer<Model, DiaMem, CriMem, ClarHandler, Schedule> {
     dialog_memory: RwLock<DiaMem>,
     criteria_memory: Arc<RwLock<CriMem>>,
     clarification_handler: Arc<ClarHandler>,
-    schedule: Schedule,
+    schedule: Arc<RwLock<Schedule>>,
     state: Arc<RwLock<State>>,
 }
 
@@ -50,8 +50,13 @@ struct State {
 
 #[trait_variant::make(Send)]
 pub trait ScheduleParamterAccessor {
+    type Error: std::error::Error;
+
     async fn get_interval_mins(&self) -> u32;
+    async fn set_interval_mins(&mut self, new_value: u32) -> Result<(), Self::Error>;
+
     async fn get_buffer_size(&self) -> usize;
+    async fn set_buffer_size(&mut self, new_value: usize) -> Result<(), Self::Error>;
 }
 
 #[trait_variant::make(Send)]
@@ -78,7 +83,7 @@ where
             dialog_memory: RwLock::new(dialog_memory.into()),
             criteria_memory: Arc::new(RwLock::new(criteria_memory.into())),
             clarification_handler: Arc::new(clarification_handler.into()),
-            schedule: schedule.into(),
+            schedule: Arc::new(RwLock::new(schedule.into())),
             state: Arc::new(RwLock::new(Default::default())),
         }
     }
@@ -108,6 +113,7 @@ where
                 gemma4::ToolHandler::new(|args| {
                     let action = action.clone();
                     let state = self.state.clone();
+                    let schedule = self.schedule.clone();
                     async move {
                         if !state
                             .read()
@@ -145,7 +151,17 @@ where
                         match rx.recv().await {
                             Some(ApproveOrDeny::Approve) => {
                                 state.write().await.actions_count += 1;
-                                Ok(format!("the new interval is {new_value} minutes.").into())
+                                Ok(gemma4::ToolResult::from(
+                                    schedule
+                                        .write()
+                                        .await
+                                        .set_interval_mins(new_value)
+                                        .await
+                                        .map(|_| {
+                                            format!("the new interval is {new_value} minutes.")
+                                        }),
+                                )
+                                .into())
                             }
                             Some(ApproveOrDeny::Deny { reason }) => {
                                 Ok(reject_message(reason).into())
@@ -172,7 +188,7 @@ where
                         .await
                         .retrival_rejected
                         .remove(&ToolcallKind::PollingInterval);
-                    Ok(self.schedule.get_interval_mins().await.into())
+                    Ok(self.schedule.read().await.get_interval_mins().await.into())
                 }),
             ),
             (
@@ -184,6 +200,7 @@ where
                 gemma4::ToolHandler::new(|args| {
                     let action = action.clone();
                     let state = self.state.clone();
+                    let schedule = self.schedule.clone();
                     async move {
                         if !state
                             .read()
@@ -221,7 +238,14 @@ where
                         match rx.recv().await {
                             Some(ApproveOrDeny::Approve) => {
                                 state.write().await.actions_count += 1;
-                                Ok(format!("the new buffer size is {new_value}").into())
+                                Ok(gemma4::ToolResult::from(
+                                    schedule
+                                        .write()
+                                        .await
+                                        .set_buffer_size(new_value)
+                                        .await
+                                        .map(|_| format!("the new buffer size is {new_value}")),
+                                ).into())
                             }
                             Some(ApproveOrDeny::Deny { reason }) => {
                                 Ok(reject_message(reason).into())
@@ -248,7 +272,7 @@ where
                         .await
                         .retrival_rejected
                         .remove(&ToolcallKind::BufferSize);
-                    Ok(self.schedule.get_buffer_size().await.into())
+                    Ok(self.schedule.read().await.get_buffer_size().await.into())
                 }),
             ),
             (
