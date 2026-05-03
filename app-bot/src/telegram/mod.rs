@@ -11,7 +11,9 @@ use futures::future::Lazy;
 use futures::{TryStreamExt, pin_mut};
 use itertools::Itertools;
 use lib_common::agent::decision::Decider;
+use lib_common::agent::error::GetTruthValueError;
 use lib_common::agent::memory::criteria::sqlite::SqliteCriteriaMemory;
+use lib_common::agent::memory::decision::DecisionMemory;
 use lib_common::agent::memory::dialog::fs::FsDialogMemory;
 use lib_common::agent::optimize::gemma4::Gemma4Optimizer;
 use lib_common::agent::optimize::{ApproveOrDeny, OptimizationCallback, OptimizerAction};
@@ -325,15 +327,25 @@ where
         let dialog_id = secure::generate_random_id(32);
         event!(Level::INFO, "created dialog_id = {dialog_id}");
         async {
+            let mut decision_mem = SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?;
             let decider = LlmConditionMatcher::new(
                 model.clone(),
                 sub.condition.to_string(),
-                SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?,
+                decision_mem.clone(),
                 FsDialogMemory::new(working_dir, &dialog_id),
                 SqliteCriteriaMemory::new(db.clone(), Some(sub_id)),
             );
-            if !decider.get_truth_value(&item).await? {
-                return Ok(());
+            match decider.get_truth_value(&item).await {
+                Ok(false) => {
+                    return Ok(());
+                }
+                Ok(true) => {}
+                Err(GetTruthValueError::DecisionMemory(err)) => {
+                    event!(Level::ERROR, "decision memory error: {err}");
+                    event!(Level::WARN, "will clear decision memory");
+                    decision_mem.clear().await?;
+                }
+                Err(err) => return Err(err.into()),
             }
 
             let msg = match feed.get_metadata().await {
