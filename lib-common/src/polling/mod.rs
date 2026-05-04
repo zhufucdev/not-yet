@@ -7,6 +7,8 @@ use serde::{Serialize, de::DeserializeOwned};
 pub mod error;
 pub mod schedule;
 pub mod task;
+#[cfg(test)]
+mod test;
 pub mod trigger;
 
 pub trait KeyContract:

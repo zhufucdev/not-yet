@@ -49,9 +49,11 @@ impl ChannelClarreqHandler {
 }
 
 impl ClarificationReqHandler for ChannelClarreqHandler {
-    async fn on_request(&self, prompt: &str) -> Option<String> {
+    type Error = NaE;
+
+    async fn on_request(&self, prompt: &str) -> Result<Option<String>, Self::Error> {
         self.req_tx.send(prompt.to_string()).await;
-        self.res_rx.write().await.recv().await.unwrap()
+        Ok(self.res_rx.write().await.recv().await.unwrap())
     }
 }
 
@@ -61,11 +63,23 @@ struct DummySchedule {
 }
 
 impl ScheduleParamterAccessor for DummySchedule {
+    type Error = NaE;
+
     async fn get_interval_mins(&self) -> u32 {
         self.interval_mins
     }
     async fn get_buffer_size(&self) -> usize {
         self.buffer_size
+    }
+
+    async fn set_interval_mins(&mut self, new_value: u32) -> Result<(), Self::Error> {
+        self.interval_mins = new_value;
+        Ok(())
+    }
+
+    async fn set_buffer_size(&mut self, new_value: usize) -> Result<(), Self::Error> {
+        self.buffer_size = new_value;
+        Ok(())
     }
 }
 
@@ -84,7 +98,7 @@ async fn optimization_callback() {
                     .await
                     .unwrap();
                 assert_eq!(rx.recv().await.unwrap(), ApproveOrDeny::Approve);
-                Ok(gemma4::ToolResult::Success("success".into()).into())
+                Ok(gemma4::ToolResult::Success("success").into())
             }
         });
         let tool_call = toolcall::ToolCall {
