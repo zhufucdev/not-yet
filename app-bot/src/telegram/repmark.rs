@@ -5,7 +5,7 @@ use teloxide::{
     prelude::Requester,
     types::{
         CallbackQuery, InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup,
-        ReplyMarkup,
+        Message, ReplyMarkup,
     },
 };
 use tracing::{Level, event};
@@ -26,10 +26,14 @@ where
 
 pub async fn remove(from: &CallbackQuery, bot: &Bot) {
     if let Some(msg) = from.regular_message() {
-        _ = bot
-            .edit_message_reply_markup(from.chat_id().unwrap(), msg.id)
-            .reply_markup(InlineKeyboardMarkup::default())
-            .await
-            .inspect_err(|err| event!(Level::WARN, "error removing reply markup: {err}"));
+        remove_from_msg(&msg, bot).await;
     }
+}
+
+pub async fn remove_from_msg(msg: &Message, bot: &Bot) {
+    _ = bot
+        .edit_message_reply_markup(msg.chat_id().unwrap(), msg.id)
+        .reply_markup(InlineKeyboardMarkup::default())
+        .await
+        .inspect_err(|err| event!(Level::WARN, "error removing reply markup: {err}"));
 }

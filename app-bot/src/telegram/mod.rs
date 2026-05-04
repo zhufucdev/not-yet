@@ -790,6 +790,7 @@ async fn receive_feedback_msg(
                     }
                 }
             }
+            repmark::remove_from_msg(&msg, &bot).await;
         } else {
             match tasks.write().await.pop().unwrap().assignment {
                 LlmAssignment::Review { approve } => {
@@ -908,6 +909,7 @@ async fn receive_feedback_query(
             },
             LlmAssignment::Clarify { send } => {
                 if data.as_str() == "n" {
+                    repmark::remove(&query, &bot).await;
                     send.send(None).await?;
                 } else {
                     bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
@@ -932,6 +934,7 @@ where
     Error: std::error::Error + Send + Sync + 'static,
 {
     bot.send_message(chat_id, "Working on it...").await?;
+    let mut actions_required = 0;
     while let Some((action, approve)) = optimization
         .accept()
         .await
@@ -973,6 +976,20 @@ where
                     .await,
             )
             .await?;
+        actions_required += 1;
+    }
+    if actions_required == 0 {
+        bot.send_message(
+            chat_id,
+            "No actions were taken. Thank you anyway, and feel free to retry next time!",
+        )
+        .await?;
+    } else {
+        bot.send_message(
+            chat_id,
+            "I have finished my job. If there's anything more, feel free to ask!",
+        )
+        .await?;
     }
     dialog.update(State::Start).await?;
     event!(Level::DEBUG, "reset dialog after multi-turn LLM");
