@@ -161,8 +161,7 @@ impl<K: KeyContract> Scheduler<K> {
                 let mut reschedule_rx = self.schedules_notify.0.subscribe();
                 let expected_next = if let Some(key) = key.as_ref() {
                     let mut guard = self.task_queue.write().await;
-                    let local_queue = guard.get_mut(key).unwrap();
-                    local_queue.pop()
+                    guard.get_mut(key).map(|bt| bt.pop()).flatten()
                 } else {
                     let guard = self.task_queue.read().await;
                     let Some((k, _)) = guard.iter().min_by_key(|(_, bt)| bt.peek()) else {
