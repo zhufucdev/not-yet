@@ -5,6 +5,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
+use tracing_test::traced_test;
 
 use crate::polling::{
     Scheduler, error::TaskCancellationError, schedule::QueueType, task::TaskState,
@@ -26,13 +27,13 @@ struct TestKey(u32);
 /// A cron expression that fires once per second – useful for "very soon"
 /// tests.  Adjust if your minimum resolution differs.
 fn every_second() -> ScheduleTrigger {
-    ScheduleTrigger::Cron("* * * * * *".to_string())
+    ScheduleTrigger::Cron("* * * * * * *".to_string())
 }
 
 /// A cron expression that fires once per minute – useful for "far future"
 /// tests so the sleep never actually elapses.
 fn every_minute() -> ScheduleTrigger {
-    ScheduleTrigger::Cron("0 * * * * *".to_string())
+    ScheduleTrigger::Cron("0 * * * * * *".to_string())
 }
 
 fn scheduler() -> Scheduler<TestKey> {
@@ -44,6 +45,7 @@ fn scheduler() -> Scheduler<TestKey> {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[traced_test]
 async fn new_scheduler_has_no_schedules() {
     let s = scheduler();
     assert!(s.schedules().await.is_empty());
@@ -54,6 +56,7 @@ async fn new_scheduler_has_no_schedules() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[traced_test]
 async fn add_schedule_returns_schedule_with_id_1_when_empty() {
     let s = scheduler();
     let schedule = s
@@ -64,6 +67,7 @@ async fn add_schedule_returns_schedule_with_id_1_when_empty() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn add_schedule_increments_id_for_each_new_schedule() {
     let s = scheduler();
     let a = s
@@ -85,6 +89,7 @@ async fn add_schedule_increments_id_for_each_new_schedule() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn add_schedule_persists_in_schedules_list() {
     let s = scheduler();
     s.add_schedule(every_second(), TestKey(42))
@@ -103,6 +108,7 @@ async fn add_schedule_persists_in_schedules_list() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn add_schedule_with_invalid_cron_returns_error() {
     let s = scheduler();
     let result = s
@@ -115,6 +121,7 @@ async fn add_schedule_with_invalid_cron_returns_error() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn add_schedule_stores_provided_key() {
     let s = scheduler();
     let schedule = s
@@ -129,6 +136,7 @@ async fn add_schedule_stores_provided_key() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[traced_test]
 async fn schedules_returns_all_added_schedules() {
     let s = scheduler();
     for i in 0..5u32 {
@@ -144,6 +152,7 @@ async fn schedules_returns_all_added_schedules() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[traced_test]
 async fn until_next_reschedule_resolves_after_add_schedule() {
     let s = scheduler();
 
@@ -159,6 +168,7 @@ async fn until_next_reschedule_resolves_after_add_schedule() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn until_next_reschedule_second_insertion_reports_existing_queue() {
     let s = scheduler();
 
@@ -182,6 +192,7 @@ async fn until_next_reschedule_second_insertion_reports_existing_queue() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[traced_test]
 async fn start_polling_yields_task_for_every_second_schedule() {
     let s = scheduler();
     s.add_schedule(every_second(), TestKey(1))
@@ -200,6 +211,7 @@ async fn start_polling_yields_task_for_every_second_schedule() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn start_polling_task_key_matches_schedule_key() {
     let s = scheduler();
     s.add_schedule(every_second(), TestKey(55))
@@ -217,6 +229,7 @@ async fn start_polling_task_key_matches_schedule_key() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn start_polling_yields_multiple_tasks_in_sequence() {
     let s = scheduler();
     s.add_schedule(every_second(), TestKey(1))
@@ -244,6 +257,7 @@ async fn start_polling_yields_multiple_tasks_in_sequence() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[traced_test]
 async fn start_polling_with_key_only_yields_matching_key() {
     let s = scheduler();
     s.add_schedule(every_second(), TestKey(1))
@@ -270,6 +284,7 @@ async fn start_polling_with_key_only_yields_matching_key() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[traced_test]
 async fn polled_task_is_in_running_state_when_yielded() {
     let s = scheduler();
     s.add_schedule(every_second(), TestKey(1))
@@ -289,6 +304,7 @@ async fn polled_task_is_in_running_state_when_yielded() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn polled_task_transitions_to_finished_after_next_poll() {
     let s = scheduler();
     s.add_schedule(every_second(), TestKey(1))
@@ -317,6 +333,7 @@ async fn polled_task_transitions_to_finished_after_next_poll() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[traced_test]
 async fn start_polling_emits_cancellation_when_earlier_schedule_inserted() {
     let s = scheduler();
 
@@ -359,6 +376,7 @@ async fn start_polling_emits_cancellation_when_earlier_schedule_inserted() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[traced_test]
 async fn start_polling_on_empty_scheduler_returns_immediately() {
     let s = scheduler();
     let mut stream = Box::pin(s.start_polling(None));
@@ -373,6 +391,7 @@ async fn start_polling_on_empty_scheduler_returns_immediately() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn start_polling_with_unknown_key_returns_immediately() {
     let s = scheduler();
     s.add_schedule(every_second(), TestKey(1))

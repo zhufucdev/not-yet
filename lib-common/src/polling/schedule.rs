@@ -158,18 +158,22 @@ impl<K: KeyContract> Scheduler<K> {
     ) -> impl Stream<Item = Result<Task<K>, TaskCancellationError>> {
         stream! {
             loop {
+                event!(Level::TRACE, "polling for next task");
                 let mut reschedule_rx = self.schedules_notify.0.subscribe();
-                let expected_next = if let Some(key) = key.as_ref() {
+                let Some(expected_next) = (if let Some(key) = key.as_ref() {
                     let mut guard = self.task_queue.write().await;
                     guard.get_mut(key).map(|bt| bt.pop()).flatten()
                 } else {
-                    let guard = self.task_queue.read().await;
-                    let Some((k, _)) = guard.iter().min_by_key(|(_, bt)| bt.peek()) else {
-                        return;
+                    let key = {
+                        let guard = self.task_queue.read().await;
+                        let Some((k, _)) = guard.iter().min_by_key(|(_, bt)| bt.peek()) else {
+                            return;
+                        };
+                        k.clone()
                     };
-                    self.task_queue.write().await.get_mut(k).unwrap().pop()
-                };
-                let Some(expected_next) = expected_next else {
+                    self.task_queue.write().await.get_mut(&key).unwrap().pop()
+                }) else {
+                    event!(Level::TRACE, "no future tasks expected, end polling now");
                     return;
                 };
                 let span = expected_next.schedule().trace_span.clone();
