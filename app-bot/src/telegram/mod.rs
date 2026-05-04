@@ -538,6 +538,7 @@ async fn chose_subscription_type(
             .await?;
         }
     }
+    repmark::remove(&query, &bot).await;
     Ok(())
 }
 
@@ -604,7 +605,7 @@ async fn choose_rss_mock_browser(
 ) -> anyhow::Result<()> {
     let chat_id = query.chat_id().unwrap();
     let user_id = query.from.id.0 as UserId;
-    let Some(action_id) = query.data else {
+    let Some(action_id) = query.data.as_ref() else {
         bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
         return Ok(());
     };
@@ -647,6 +648,7 @@ async fn choose_rss_mock_browser(
             dialog.reset().await?;
             bot.send_message(chat_id, "I see. You are ready to go")
                 .await?;
+            repmark::remove(&query, &bot).await;
             return Ok(());
         }
         _ => {
@@ -654,6 +656,7 @@ async fn choose_rss_mock_browser(
             return Ok(());
         }
     }
+    repmark::remove(&query, &bot).await;
     bot.send_message(
         chat_id,
         "Perfect! One more question. Any other custom headers?",
@@ -673,7 +676,7 @@ async fn choose_rss_custom_headers(
 ) -> anyhow::Result<()> {
     let chat_id = query.chat_id().unwrap();
     let user_id = query.from.id.0 as UserId;
-    let Some(action_id) = query.data else {
+    let Some(action_id) = query.data.as_ref() else {
         bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
         return Ok(());
     };
@@ -693,6 +696,7 @@ async fn choose_rss_custom_headers(
             bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
         }
     }
+    repmark::remove(&query, &bot).await;
     Ok(())
 }
 
@@ -790,7 +794,6 @@ async fn receive_feedback_msg(
                     }
                 }
             }
-            repmark::remove_from_msg(&msg, &bot).await;
         } else {
             match tasks.write().await.pop().unwrap().assignment {
                 LlmAssignment::Review { approve } => {
@@ -805,6 +808,7 @@ async fn receive_feedback_msg(
                 }
             }
         };
+        repmark::remove_from_msg(&msg, &bot).await;
     } else {
         event!(Level::TRACE, "state = start");
         if let Some(reply) = msg.reply_to_message() {
