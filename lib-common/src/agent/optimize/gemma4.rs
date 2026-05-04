@@ -62,7 +62,8 @@ pub trait ScheduleParamterAccessor {
 
 #[trait_variant::make(Send)]
 pub trait ClarificationReqHandler {
-    async fn on_request(&self, prompt: &str) -> Option<String>;
+    type Error: std::error::Error;
+    async fn on_request(&self, prompt: &str) -> Result<Option<String>, Self::Error>;
 }
 
 impl<Model, DiaMem, CriMem, ClarHandler, Schedule>
@@ -94,6 +95,7 @@ impl<Model, DiaMem, CriMem, ClarHandler, Schedule>
 where
     Schedule: ScheduleParamterAccessor + Send + Sync + 'static,
     ClarHandler: ClarificationReqHandler + Send + Sync + 'static,
+    ClarHandler::Error: Send + Sync + 'static,
     DiaMem: Send + Sync + 'static,
     CriMem: CriteriaMemory + Send + Sync + 'static,
     CriMem::Error: Display,
@@ -367,7 +369,12 @@ where
                             )
                             .into());
                         };
-                        if let Some(clarification) = ch.on_request(question).await {
+                        if let Some(clarification) = ch
+                            .on_request(question)
+                            .await
+                            .map_err(anyhow::Error::from)
+                            .map_err(ToolHandlerError::ClarificationRequest)?
+                        {
                             Ok(clarification.into())
                         } else {
                             Ok("the user actively rejected your request".into())
@@ -413,6 +420,7 @@ where
     Model: Send + Sync + 'static,
     Model::Error: Send + Sync + 'static,
     ClarHandler: ClarificationReqHandler + Sync + 'static,
+    ClarHandler::Error: Send + Sync + 'static,
     Schedule: ScheduleParamterAccessor + Sync + 'static,
     DiaMem: DialogMemory<Dialog = gemma4::Dialog> + Send + Sync + 'static,
     DiaMem::Error: Display,
@@ -559,10 +567,12 @@ pub enum Error<Model> {
     ToolHandler(#[from] ToolHandlerError),
 }
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Error)]
 pub enum ToolHandlerError {
     #[error("channel closed")]
     ChannelClosed,
+    #[error("clarification request: {0}")]
+    ClarificationRequest(anyhow::Error),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -43,10 +43,11 @@ use teloxide::{
     prelude::*,
 };
 use tokio::select;
-use tokio::sync::mpsc;
+use tokio::sync::{RwLock, mpsc};
 use tracing::{Instrument, Level, event, info_span};
 use tracing_subscriber::EnvFilter;
 
+use crate::telegram::state::{LlmAssignment, OptimizationTask, StateFeedback};
 use crate::{
     authenticator::{
         Access, Authenticator as _, priority::PriorityAuthenticator, sqlite::SqliteAuthenticator,
@@ -149,7 +150,6 @@ pub(super) async fn main() -> anyhow::Result<()> {
                                 },
                                 Err(err) => {
                                     event!(Level::ERROR, "while polling: {err}");
-                                    break;
                                 },
                             }
                         },
@@ -191,14 +191,8 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                     }]
                     .endpoint(choose_rss_custom_headers),
                 )
-                .branch(dptree::case![State::Feedingback { clareq }].endpoint(reject_clarification))
                 .branch(
-                    dptree::case![State::ReviewingOptimization {
-                        clareq,
-                        approve,
-                        prompt
-                    }]
-                    .endpoint(approve_or_deny_optimization),
+                    dptree::case![State::Feedingback { tasks }].endpoint(receive_feedback_query),
                 ),
         )
         .branch(
@@ -222,14 +216,6 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                         kind
                     }]
                     .endpoint(receive_rss_custom_headers),
-                )
-                .branch(
-                    dptree::case![State::ReviewingOptimization {
-                        clareq,
-                        approve,
-                        prompt
-                    }]
-                    .endpoint(deny_optimization_with_reason),
                 )
                 .endpoint(receive_feedback_msg),
         )
@@ -757,34 +743,67 @@ async fn receive_feedback_msg(
     working_dir: PathBuf,
 ) -> anyhow::Result<()> {
     let chat_id = msg.chat_id().unwrap();
-    if let Some(State::Feedingback { clareq }) = dialog.get().await? {
+    if let Some(State::Feedingback { tasks }) = dialog.get().await? {
         event!(Level::TRACE, "state = feedback");
-        if clareq.empty().await {
-            event!(
-                Level::WARN,
-                "clarification request handler is empty, ignoring"
-            );
+        if tasks.read().await.is_empty() {
+            event!(Level::WARN, "feedback task queue is empty, ignoring");
             return Ok(());
         }
-        let Some(clarification) = msg.markdown_text() else {
+        let Some(msg_text) = msg.markdown_text() else {
             bot.send_message(chat_id, "I do not understand your input. Sorry! Feel free to try again using a different one.").await?;
             return Ok(());
         };
         if let Some(reply) = msg.reply_to_message() {
-            if let Some(quote) = reply.markdown_text() {
-                clareq
-                    .send(format!(
-                        "> {}\n{}",
-                        quote.replace("\n", "\n> "),
-                        clarification
-                    ))
-                    .await;
+            if let Some((idx, task)) = tasks
+                .read()
+                .await
+                .iter()
+                .find_position(|t| t.prompt == reply.id)
+            {
+                match &task.assignment {
+                    LlmAssignment::Review { approve } => {
+                        approve
+                            .send(ApproveOrDeny::Deny {
+                                reason: Some(msg_text),
+                            })
+                            .await?
+                    }
+                    LlmAssignment::Clarify { send } => send.send(Some(msg_text)).await?,
+                }
+                tasks.write().await.remove(idx);
             } else {
-                clareq.send(clarification).await;
+                let send_back = if let Some(quote) = reply.markdown_text() {
+                    format!("> {}\n{}", quote.replace("\n", "\n> "), msg_text)
+                } else {
+                    msg_text
+                };
+                match tasks.write().await.pop().unwrap().assignment {
+                    LlmAssignment::Review { approve } => {
+                        approve
+                            .send(ApproveOrDeny::Deny {
+                                reason: Some(send_back),
+                            })
+                            .await?;
+                    }
+                    LlmAssignment::Clarify { send } => {
+                        send.send(Some(send_back)).await?;
+                    }
+                }
             }
         } else {
-            clareq.send(clarification).await;
-        }
+            match tasks.write().await.pop().unwrap().assignment {
+                LlmAssignment::Review { approve } => {
+                    approve
+                        .send(ApproveOrDeny::Deny {
+                            reason: Some(msg_text),
+                        })
+                        .await?;
+                }
+                LlmAssignment::Clarify { send } => {
+                    send.send(Some(msg_text)).await?;
+                }
+            }
+        };
     } else {
         event!(Level::TRACE, "state = start");
         if let Some(reply) = msg.reply_to_message() {
@@ -801,27 +820,20 @@ async fn receive_feedback_msg(
                 .await?;
                 return Ok(());
             };
-            let cf_handler = clarify::TgClarReqHandler::new(bot.clone(), chat_id);
             let optimizer = Arc::new(Gemma4Optimizer::new(
                 llm::DEFAULT_MODEL.clone(),
                 FsDialogMemory::<gemma4::Dialog>::new(working_dir, model.dialog_id),
                 SqliteCriteriaMemory::new(db.clone(), Some(model.subscription_id)),
-                cf_handler.clone(),
+                clarify::TgClarReqHandler::new(bot.clone(), chat_id, dialog.clone()),
                 subscription::ModelParamterAccessor::new(db.clone(), sub),
             ));
             if let Some(optimization) = optimizer.optimize_inplace(msg.text()).await? {
                 dialog
                     .update(State::Feedingback {
-                        clareq: cf_handler.clone(),
+                        tasks: Default::default(),
                     })
                     .await?;
-                tokio::spawn(handle_optimization(
-                    optimization,
-                    cf_handler,
-                    bot,
-                    chat_id,
-                    dialog,
-                ));
+                tokio::spawn(handle_optimization(optimization, bot, chat_id, dialog));
             } else {
                 bot.send_message(chat_id, "I don't know how to help with that, cause I forgot about the conversation. Sorry!").await?;
             }
@@ -839,91 +851,69 @@ async fn receive_feedback_msg(
     Ok(())
 }
 
-async fn approve_or_deny_optimization(
+async fn receive_feedback_query(
     bot: Bot,
     query: CallbackQuery,
-    (_, approve, _): (
-        clarify::TgClarReqHandler,
-        mpsc::Sender<ApproveOrDeny>,
-        MessageId,
-    ), // State::ReviewingOptimization
+    tasks: Arc<RwLock<Vec<OptimizationTask>>>,
 ) -> anyhow::Result<()> {
-    let chat_id = query.chat_id().unwrap();
-    let Some(data) = query.data.as_ref() else {
-        bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
-        return Ok(());
-    };
-    match data.as_str() {
-        "y" => {
-            repmark::remove(&query, &bot).await;
-            approve.send(ApproveOrDeny::Approve).await?;
-        }
-        "n" => {
-            repmark::remove(&query, &bot).await;
-            approve.send(ApproveOrDeny::Deny { reason: None }).await?;
-        }
-        _ => {
-            bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
-        }
-    }
-    Ok(())
-}
+    async {
+        let Some(msg) = query.regular_message() else {
+            event!(Level::WARN, "query message is empty, ignoring");
+            return Ok(());
+        };
+        let Some(data) = query.data.as_ref() else {
+            bot.send_message(query.chat_id().unwrap(), EMPTY_MESSAGE_RESPONSE)
+                .await?;
+            return Ok(());
+        };
+        let Some((idx, task)) = (async || {
+            let guard = tasks.read().await;
+            guard
+                .iter()
+                .find_position(|t| t.prompt == msg.id)
+                .map(|(idx, task)| (idx, task.clone()))
+        })()
+        .await
+        else {
+            bot.send_message(query.chat_id().unwrap(), "That's beyond my scope. Sorry!")
+                .await?;
+            return Ok(());
+        };
 
-async fn deny_optimization_with_reason(
-    bot: Bot,
-    msg: Message,
-    (_, approve, prompt): (
-        clarify::TgClarReqHandler,
-        mpsc::Sender<ApproveOrDeny>,
-        MessageId,
-    ), // State::ReviewingOptimization
-) -> anyhow::Result<()> {
-    if let Some(reason) = msg.markdown_text() {
-        event!(Level::TRACE, "reason = {reason}");
-        _ = bot
-            .edit_message_reply_markup(msg.chat_id().unwrap(), prompt)
-            .reply_markup(InlineKeyboardMarkup::default())
-            .await
-            .inspect_err(|err| event!(Level::WARN, "error removing reply markup: {err}"));
-        approve
-            .send(ApproveOrDeny::Deny {
-                reason: Some(reason),
-            })
-            .await?;
-    } else {
-        event!(Level::TRACE, "empty text message");
-        bot.send_message(
-            msg.chat_id().unwrap(),
-            "I do not understand your input. Feel free to try again anytime",
-        )
-        .await?;
+        match &task.assignment {
+            LlmAssignment::Review { approve } => match data.as_str() {
+                "y" => {
+                    repmark::remove(&query, &bot).await;
+                    approve.send(ApproveOrDeny::Approve).await?
+                }
+                "n" => {
+                    repmark::remove(&query, &bot).await;
+                    approve.send(ApproveOrDeny::Deny { reason: None }).await?
+                }
+                _ => {
+                    bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
+                        .await?;
+                    return Ok(());
+                }
+            },
+            LlmAssignment::Clarify { send } => {
+                if data.as_str() == "n" {
+                    send.send(None).await?;
+                } else {
+                    bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
+                        .await?;
+                }
+            }
+        }
+        tasks.write().await.remove(idx);
+        Ok(())
     }
-    Ok(())
-}
-
-async fn reject_clarification(
-    bot: Bot,
-    query: CallbackQuery,
-    clareq: clarify::TgClarReqHandler,
-) -> anyhow::Result<()> {
-    event!(Level::TRACE, "data = {:?}", query.data);
-    let Some(data) = query.data.as_ref() else {
-        bot.send_message(query.chat_id().unwrap(), EMPTY_MESSAGE_RESPONSE)
-            .await?;
-        return Ok(());
-    };
-    if data.as_str() == "n" {
-        clareq.reject().await;
-    } else {
-        bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
-            .await?;
-    }
-    Ok(())
+    .instrument(info_span!("receive_feedback_query", data = ?query.data))
+    .await
 }
 
 async fn handle_optimization<Error>(
     mut optimization: OptimizationCallback<Error>,
-    cf_handler: clarify::TgClarReqHandler,
     bot: Bot,
     chat_id: ChatId,
     dialog: MasterDialog,
@@ -962,12 +952,17 @@ where
         ]]))
         .await?;
         dialog
-            .update(State::ReviewingOptimization {
-                clareq: cf_handler.clone(),
-                approve,
-                prompt: prompt.id,
-            })
-            .await?;
+            .update(
+                dialog
+                    .get_or_default()
+                    .await?
+                    .with_task_queued([OptimizationTask {
+                        prompt: prompt.id,
+                        assignment: LlmAssignment::Review { approve },
+                    }])
+                    .await,
+            )
+            .await;
     }
     dialog.update(State::Start).await?;
     event!(Level::DEBUG, "reset dialog after multi-turn LLM");
