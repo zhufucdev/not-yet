@@ -34,4 +34,8 @@ impl super::CriteriaMemory for DebugCriteriaMemory {
         self.criteria.remove(index);
         Ok(())
     }
+
+    async fn is_empty(&self) -> bool {
+        self.criteria.is_empty()
+    }
 }

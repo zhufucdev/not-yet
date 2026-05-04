@@ -176,21 +176,18 @@ where
                     "current polling interval in minutes",
                     schema_for_type::<EmptyObject>(),
                 ),
-                gemma4::ToolHandler::new(move |_| {
-                    let state = state.clone();
-                    async move {
-                        state
-                            .write()
-                            .await
-                            .checked
-                            .insert(ToolcallKind::PollingInterval);
-                        state
-                            .write()
-                            .await
-                            .retrival_rejected
-                            .remove(&ToolcallKind::PollingInterval);
-                        Ok(self.schedule.read().await.get_interval_mins().await.into())
-                    }
+                gemma4::ToolHandler::new(move |_| async move {
+                    state
+                        .write()
+                        .await
+                        .checked
+                        .insert(ToolcallKind::PollingInterval);
+                    state
+                        .write()
+                        .await
+                        .retrival_rejected
+                        .remove(&ToolcallKind::PollingInterval);
+                    Ok(self.schedule.read().await.get_interval_mins().await.into())
                 }),
             ),
             (
@@ -283,7 +280,9 @@ where
                     let action = action.clone();
                     let criteria_memory = self.criteria_memory.clone();
                     async move {
-                        if !state.read().await.checked.contains(&ToolcallKind::Criteria) {
+                        if criteria_memory.read().await.is_empty().await {
+                            state.write().await.checked.insert(ToolcallKind::Criteria);
+                        } else if !state.read().await.checked.contains(&ToolcallKind::Criteria) {
                             state
                                 .write()
                                 .await

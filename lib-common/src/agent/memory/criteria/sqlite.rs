@@ -67,6 +67,15 @@ impl super::CriteriaMemory for SqliteCriteriaMemory {
         Entity::delete_by_id(id.clone()).exec(&self.db).await?;
         Ok(())
     }
+
+    async fn is_empty(&self) -> bool {
+        Entity::find()
+            .filter(Column::AgentId.eq(self.agent_id))
+            .count(&self.db)
+            .await
+            .unwrap()
+            > 0
+    }
 }
 
 #[derive(Debug, Clone, Error)]
