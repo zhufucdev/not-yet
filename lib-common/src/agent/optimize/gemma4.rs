@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    default,
     fmt::{Debug, Display},
     ops::{Add, DerefMut},
     sync::Arc,
@@ -425,22 +426,7 @@ where
         prompt: Option<impl ToString + Send>,
         dialog: &gemma4::Dialog,
     ) -> OptimizationCallback<Self::Error> {
-        let initial_prompt = {
-            let literals = [(
-                "user_prompt".into(),
-                prompt
-                    .map(|p| p.to_string())
-                    .unwrap_or("I don't like this post.".into()),
-            )]
-            .into_iter()
-            .collect();
-            template::expand_prompt(include_str!("./prompt.xml"), &literals, &Default::default())
-                .expect("initial prompt failed")
-        };
-
-        let this = self.clone();
-        let mut dialog = dialog.clone();
-        let state = RwLock::new(State {
+        let state = State {
             checked: dialog
                 .turns()
                 .into_iter()
@@ -459,8 +445,31 @@ where
                 })
                 .collect(),
             ..Default::default()
-        });
+        };
+        const DEFAULT_PROMPT: &str = "I don't like this post.";
+        let initial_prompt = if state.checked.is_empty() {
+            let literals = [(
+                "user_prompt".into(),
+                prompt
+                    .map(|p| p.to_string())
+                    .unwrap_or(DEFAULT_PROMPT.into()),
+            )]
+            .into_iter()
+            .collect();
+            template::expand_prompt(include_str!("./prompt.xml"), &literals, &Default::default())
+                .expect("initial prompt failed")
+        } else {
+            [prompt
+                .map(|p| p.to_string())
+                .unwrap_or(DEFAULT_PROMPT.into())
+                .into()]
+            .into()
+        };
+
+        let this = self.clone();
+        let mut dialog = dialog.clone();
         OptimizationCallback::new(async move |action| {
+            let state = RwLock::new(state);
             let (tools, handlers) = this
                 .get_tools_and_handlers(&state, &action)
                 .into_iter()
