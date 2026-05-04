@@ -7,7 +7,6 @@ use std::{
 use async_stream::stream;
 use chrono::{DateTime, Utc};
 use futures::Stream;
-use rmp_serde::to_vec;
 use tokio::sync::{
     RwLock,
     broadcast::{self, error::RecvError},

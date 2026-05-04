@@ -5,7 +5,7 @@ use smol_str::SmolStr;
 use teloxide::types::MessageId;
 use tokio::sync::{RwLock, mpsc};
 
-use crate::{db::subscription, telegram::MasterDialog};
+use crate::db::subscription;
 
 #[derive(Clone, Default)]
 pub enum State {

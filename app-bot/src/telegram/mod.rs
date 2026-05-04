@@ -1,4 +1,3 @@
-use std::cell::LazyCell;
 use std::path::PathBuf;
 use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
 
@@ -6,9 +5,7 @@ use ::futures::future;
 use anyhow::{Context, anyhow};
 use app_common::config::ParseConfigPath;
 use clap::Parser;
-use futures::Stream;
-use futures::future::Lazy;
-use futures::{TryStreamExt, pin_mut};
+use futures::TryStreamExt;
 use itertools::Itertools;
 use lib_common::agent::decision::Decider;
 use lib_common::agent::error::GetTruthValueError;
@@ -18,21 +15,19 @@ use lib_common::agent::memory::dialog::fs::FsDialogMemory;
 use lib_common::agent::optimize::gemma4::Gemma4Optimizer;
 use lib_common::agent::optimize::{ApproveOrDeny, OptimizationCallback, OptimizerAction};
 use lib_common::llm::dialog::gemma4;
-use lib_common::{agent, llm, secure};
 use lib_common::{
     agent::{LlmConditionMatcher, memory::decision::SqliteDecisionMemory},
-    llm::timeout::{ModelProducer, TimedModel},
+    llm::timeout::TimedModel,
     polling::{Schedule, Scheduler, schedule::QueueType},
     source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed, atom::AtomFeed},
     update::sqlite::SqliteUpdatePersistence,
 };
+use lib_common::{llm, secure};
 use llama_runner::Gemma4VisionRunner;
-use llama_runner::sample::SimpleSamplingParams;
 use llama_runner::{RunnerWithRecommendedSampling, error::CreateLlamaCppRunnerError};
 use sea_orm::{ActiveEnum, ColumnTrait, DatabaseConnection, EntityTrait, Iterable, QueryFilter};
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::SmolStr;
-use teloxide::types::{InlineKeyboardMarkup, MessageId};
 use teloxide::utils::render::RenderMessageTextHelper;
 use teloxide::{
     dispatching::{
@@ -43,7 +38,7 @@ use teloxide::{
     prelude::*,
 };
 use tokio::select;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::RwLock;
 use tracing::{Instrument, Level, event, info_span};
 use tracing_subscriber::EnvFilter;
 

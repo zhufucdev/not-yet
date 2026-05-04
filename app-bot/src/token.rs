@@ -1,4 +1,4 @@
-use std::{fmt::Display, sync::Arc};
+use std::sync::Arc;
 
 use smol_str::SmolStr;
 use tokio::sync::RwLock;

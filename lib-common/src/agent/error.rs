@@ -1,6 +1,5 @@
-use core::error;
 
-use llama_runner::error::{GenericRunnerError, RunnerError};
+use llama_runner::error::RunnerError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

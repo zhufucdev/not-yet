@@ -2,7 +2,7 @@ use std::{cmp::max, sync::Arc};
 
 use escaping::Escape;
 use serde::Serialize;
-use smol_str::{SmolStr, ToSmolStr};
+use smol_str::SmolStr;
 
 pub mod atom;
 pub mod rss;

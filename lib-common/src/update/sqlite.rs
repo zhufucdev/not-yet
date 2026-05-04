@@ -3,7 +3,7 @@ use std::{
     marker::PhantomData,
 };
 
-use sea_orm::{ExprTrait, prelude::*, sea_query};
+use sea_orm::{ExprTrait, prelude::*};
 use tracing::{Level, event};
 
 use crate::{source::LlmComprehendable, update::UpdatePersistence};

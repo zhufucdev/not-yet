@@ -5,7 +5,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
-use tracing::{Level, event, warn_span};
+use tracing::{Level, event};
 
 use crate::polling::{KeyContract, Schedule};
 

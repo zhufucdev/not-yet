@@ -1,6 +1,5 @@
 use std::{fmt::Display, sync::Arc};
 
-use crate::llm::SharedImageOrText;
 use tokio::sync::mpsc;
 
 pub mod gemma4;

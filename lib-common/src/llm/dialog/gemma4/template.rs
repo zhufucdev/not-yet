@@ -1,7 +1,4 @@
-use std::{
-    cell::RefCell,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use llama_cpp_2::model::{LlamaChatTemplate, LlamaModel};
 use llama_runner::{

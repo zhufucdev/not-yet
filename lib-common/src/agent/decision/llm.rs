@@ -4,7 +4,7 @@ use crate::{
     agent::{
         error::GetTruthValueError,
         memory::{
-            criteria::{self, CriteriaMemory},
+            criteria::CriteriaMemory,
             decision::{Decision, DecisionMemory},
             dialog::DialogMemory,
         },
