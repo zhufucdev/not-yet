@@ -856,11 +856,11 @@ async fn receive_feedback_query(
     query: CallbackQuery,
     tasks: Arc<RwLock<Vec<OptimizationTask>>>,
 ) -> anyhow::Result<()> {
+    let Some(msg) = query.regular_message() else {
+        event!(Level::WARN, "query message is empty, ignoring");
+        return Ok(());
+    };
     async {
-        let Some(msg) = query.regular_message() else {
-            event!(Level::WARN, "query message is empty, ignoring");
-            return Ok(());
-        };
         let Some(data) = query.data.as_ref() else {
             bot.send_message(query.chat_id().unwrap(), EMPTY_MESSAGE_RESPONSE)
                 .await?;
@@ -877,6 +877,16 @@ async fn receive_feedback_query(
         else {
             bot.send_message(query.chat_id().unwrap(), "That's beyond my scope. Sorry!")
                 .await?;
+            event!(
+                Level::WARN,
+                "scope error, available: {:?}",
+                tasks
+                    .read()
+                    .await
+                    .iter()
+                    .map(|t| t.prompt)
+                    .collect::<Vec<_>>()
+            );
             return Ok(());
         };
 
@@ -908,7 +918,7 @@ async fn receive_feedback_query(
         tasks.write().await.remove(idx);
         Ok(())
     }
-    .instrument(info_span!("receive_feedback_query", data = ?query.data))
+    .instrument(info_span!("receive_feedback_query", data = ?query.data, msg_id = ?msg.id))
     .await
 }
 
@@ -962,7 +972,7 @@ where
                     }])
                     .await,
             )
-            .await;
+            .await?;
     }
     dialog.update(State::Start).await?;
     event!(Level::DEBUG, "reset dialog after multi-turn LLM");

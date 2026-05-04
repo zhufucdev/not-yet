@@ -60,7 +60,7 @@ impl StateFeedback for State {
     async fn with_task_queued(self, queue: impl IntoIterator<Item = OptimizationTask>) -> Self {
         match &self {
             State::Feedingback { tasks } => {
-                tasks.read().await.clone().extend(queue);
+                tasks.write().await.extend(queue);
                 self
             }
             _ => State::Feedingback {
@@ -69,4 +69,3 @@ impl StateFeedback for State {
         }
     }
 }
-
