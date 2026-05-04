@@ -440,8 +440,27 @@ where
 
         let this = self.clone();
         let mut dialog = dialog.clone();
+        let state = RwLock::new(State {
+            checked: dialog
+                .turns()
+                .into_iter()
+                .filter_map(|turn| match turn {
+                    gemma4::DialogTurn::ToolResponses(res) => {
+                        Some(res.into_iter().map(|tool| tool.name.clone()))
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .filter_map(|tool_name| match tool_name.as_str() {
+                    "get_polling_interval" => Some(ToolcallKind::PollingInterval),
+                    "get_buffer_size" => Some(ToolcallKind::BufferSize),
+                    "get_criteria" => Some(ToolcallKind::Criteria),
+                    _ => None,
+                })
+                .collect(),
+            ..Default::default()
+        });
         OptimizationCallback::new(async move |action| {
-            let state = RwLock::new(State::default());
             let (tools, handlers) = this
                 .get_tools_and_handlers(&state, &action)
                 .into_iter()
