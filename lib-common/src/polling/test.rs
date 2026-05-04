@@ -345,21 +345,21 @@ async fn start_polling_emits_cancellation_when_earlier_schedule_inserted() {
     let mut stream = Box::pin(s.start_polling(None));
 
     // Spawn a task that inserts an earlier schedule shortly after polling
-    // starts.  We use every_second() which fires sooner than every_minute().
+    // starts. We use every_second() which fires sooner than every_minute().
     tokio::spawn({
         // We need an owned handle; clone the scheduler or use Arc.
         // Adjust if Scheduler is wrapped in Arc in your real code.
+        let s = s.clone();
         async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            // (This requires Scheduler to be Clone or Arc-wrapped in real use;
-            //  adapt accordingly.)
+            s.add_schedule(every_second(), TestKey(1)).await.unwrap();
         }
     });
 
     // The first item yielded should be a cancellation error because a
     // new, earlier schedule was inserted while we were waiting.
     // NOTE: this test assumes the scheduler detects the earlier trigger and
-    // cancels.  The exact timing may require adjusting the sleep above.
+    // cancels. The exact timing may require adjusting the sleep above.
     let first = timeout(Duration::from_secs(2), stream.next())
         .await
         .expect("timed out waiting for cancellation")

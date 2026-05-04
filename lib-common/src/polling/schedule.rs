@@ -29,12 +29,13 @@ pub struct Schedule<Key: KeyContract> {
     pub(super) trace_span: Span,
 }
 
+#[derive(Clone)]
 pub struct Scheduler<K: KeyContract> {
     schedules: Arc<RwLock<Vec<Arc<Schedule<K>>>>>,
     task_queue: Arc<RwLock<HashMap<K, BinaryHeap<Task<K>>>>>,
     schedules_notify: (
         broadcast::Sender<(QueueType, Arc<Schedule<K>>)>,
-        broadcast::Receiver<(QueueType, Arc<Schedule<K>>)>,
+        Arc<broadcast::Receiver<(QueueType, Arc<Schedule<K>>)>>,
     ),
 }
 
@@ -68,20 +69,22 @@ impl<K: KeyContract> FromIterator<Schedule<K>> for Scheduler<K> {
         }
         event!(Level::DEBUG, "loaded {} schedules", schedules.len());
 
+        let (tx, rx) = broadcast::channel(1);
         Self {
             task_queue: Arc::new(RwLock::new(task_queue)),
             schedules: Arc::new(RwLock::new(schedules)),
-            schedules_notify: broadcast::channel(1),
+            schedules_notify: (tx, Arc::new(rx)),
         }
     }
 }
 
 impl<K: KeyContract> Scheduler<K> {
     pub fn new() -> Self {
+        let (tx, rx) = broadcast::channel(1);
         Self {
             task_queue: Arc::new(RwLock::new(HashMap::new())),
             schedules: Arc::new(RwLock::new(Vec::new())),
-            schedules_notify: broadcast::channel(1),
+            schedules_notify: (tx, Arc::new(rx)),
         }
     }
 
