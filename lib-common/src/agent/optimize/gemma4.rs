@@ -589,7 +589,7 @@ struct RequestClarificationInputParams {
 
 fn reject_message(reason: Option<String>) -> String {
     if let Some(reason) = reason {
-        format!("rejected: {reason}")
+        format!("user rejected, reason: {reason}")
     } else {
         "the user actively rejected your request".into()
     }
