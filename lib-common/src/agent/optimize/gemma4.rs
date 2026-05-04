@@ -1,7 +1,8 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     fmt::{Debug, Display},
-    ops::Add,
+    ops::{Add, DerefMut},
     sync::Arc,
 };
 
@@ -38,7 +39,6 @@ pub struct Gemma4Optimizer<Model, DiaMem, CriMem, ClarHandler, Schedule> {
     criteria_memory: Arc<RwLock<CriMem>>,
     clarification_handler: Arc<ClarHandler>,
     schedule: Arc<RwLock<Schedule>>,
-    state: Arc<RwLock<State>>,
 }
 
 #[derive(Debug, Default)]
@@ -84,7 +84,6 @@ where
             criteria_memory: Arc::new(RwLock::new(criteria_memory.into())),
             clarification_handler: Arc::new(clarification_handler.into()),
             schedule: Arc::new(RwLock::new(schedule.into())),
-            state: Arc::new(RwLock::new(Default::default())),
         }
     }
 }
@@ -101,6 +100,7 @@ where
 {
     fn get_tools_and_handlers<'a>(
         &'a self,
+        state: &'a RwLock<State>,
         action: &'a mpsc::Sender<(OptimizerAction, mpsc::Sender<ApproveOrDeny>)>,
     ) -> Vec<(Tool, gemma4::ToolHandler<'a, ToolHandlerError>)> {
         vec![
@@ -110,9 +110,8 @@ where
                     "if the user complain about update frequencies, you can change the polling intervals and / or max buffer size. must retrive the current value first",
                     schema_for_type::<SetPollingInterInputParams>(),
                 ),
-                gemma4::ToolHandler::new(|args| {
+                gemma4::ToolHandler::new(move |args| {
                     let action = action.clone();
-                    let state = self.state.clone();
                     let schedule = self.schedule.clone();
                     async move {
                         if !state
@@ -177,18 +176,21 @@ where
                     "current polling interval in minutes",
                     schema_for_type::<EmptyObject>(),
                 ),
-                gemma4::ToolHandler::new(async |_| {
-                    self.state
-                        .write()
-                        .await
-                        .checked
-                        .insert(ToolcallKind::PollingInterval);
-                    self.state
-                        .write()
-                        .await
-                        .retrival_rejected
-                        .remove(&ToolcallKind::PollingInterval);
-                    Ok(self.schedule.read().await.get_interval_mins().await.into())
+                gemma4::ToolHandler::new(move |_| {
+                    let state = state.clone();
+                    async move {
+                        state
+                            .write()
+                            .await
+                            .checked
+                            .insert(ToolcallKind::PollingInterval);
+                        state
+                            .write()
+                            .await
+                            .retrival_rejected
+                            .remove(&ToolcallKind::PollingInterval);
+                        Ok(self.schedule.read().await.get_interval_mins().await.into())
+                    }
                 }),
             ),
             (
@@ -197,9 +199,8 @@ where
                     "a buffer is where polled updates are staged, discarding overflowing ones. A smaller buffer would suit rapid-changing feeds, while a bigger one preserves more details. must retrive the current value first",
                     schema_for_type::<SetBufferSizeInputParams>(),
                 ),
-                gemma4::ToolHandler::new(|args| {
+                gemma4::ToolHandler::new(move |args| {
                     let action = action.clone();
-                    let state = self.state.clone();
                     let schedule = self.schedule.clone();
                     async move {
                         if !state
@@ -245,7 +246,8 @@ where
                                         .set_buffer_size(new_value)
                                         .await
                                         .map(|_| format!("the new buffer size is {new_value}")),
-                                ).into())
+                                )
+                                .into())
                             }
                             Some(ApproveOrDeny::Deny { reason }) => {
                                 Ok(reject_message(reason).into())
@@ -262,12 +264,8 @@ where
                     schema_for_type::<EmptyObject>(),
                 ),
                 gemma4::ToolHandler::new(async |_| {
-                    self.state
-                        .write()
-                        .await
-                        .checked
-                        .insert(ToolcallKind::BufferSize);
-                    self.state
+                    state.write().await.checked.insert(ToolcallKind::BufferSize);
+                    state
                         .write()
                         .await
                         .retrival_rejected
@@ -278,13 +276,12 @@ where
             (
                 Tool::new(
                     "add_criteria",
-                    "add reflections on this interaction, be it clarification on a definition, notes on user's preferences, or tips to improve judgemental accuracy in general; keep it brief and to the point. must retrive the current values first",
+                    "add reflections on this interaction, be it clarification on a definition, notes on user's preferences, or tips to improve judgemental accuracy in general; keep it brief and to the point",
                     schema_for_type::<UpdateCriteriaInputParams>(),
                 ),
-                gemma4::ToolHandler::new(|args| {
+                gemma4::ToolHandler::new(move |args| {
                     let action = action.clone();
                     let criteria_memory = self.criteria_memory.clone();
-                    let state = self.state.clone();
                     async move {
                         if !state.read().await.checked.contains(&ToolcallKind::Criteria) {
                             state
@@ -331,12 +328,8 @@ where
                     schema_for_type::<EmptyObject>(),
                 ),
                 gemma4::ToolHandler::new(async |_| {
-                    self.state
-                        .write()
-                        .await
-                        .checked
-                        .insert(ToolcallKind::Criteria);
-                    self.state
+                    state.write().await.checked.insert(ToolcallKind::Criteria);
+                    state
                         .write()
                         .await
                         .retrival_rejected
@@ -449,14 +442,15 @@ where
         let this = self.clone();
         let mut dialog = dialog.clone();
         OptimizationCallback::new(async move |action| {
-            let (tools, handlers) = this.get_tools_and_handlers(&action).into_iter().fold(
-                (Vec::new(), HashMap::new()),
-                |(mut t, mut h), curr| {
+            let state = RwLock::new(State::default());
+            let (tools, handlers) = this
+                .get_tools_and_handlers(&state, &action)
+                .into_iter()
+                .fold((Vec::new(), HashMap::new()), |(mut t, mut h), curr| {
                     h.insert(curr.0.name.to_string(), curr.1);
                     t.push(curr.0);
                     (t, h)
-                },
-            );
+                });
             let mut req = gemma4::DialogRequest::new(gemma4::DialogTurn::User(initial_prompt))
                 .with_tools(tools)
                 .enable_thinking();
@@ -493,8 +487,8 @@ where
                 } else if let Some(gemma4::DialogTurn::Assistant(res)) = dialog.turns().last()
                     && res.tool_calls.is_empty()
                 {
-                    let state = this.state.read().await;
                     let gave_up = res.content.to_lowercase().contains("give up");
+                    let state = state.read().await;
                     if state.retrival_rejected.is_empty() && state.actions_count > 0 || gave_up {
                         event!(Level::DEBUG, "optimization finished");
                         event!(Level::TRACE, "history: {:#?}", dialog.history());
