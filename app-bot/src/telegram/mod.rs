@@ -700,7 +700,6 @@ async fn choose_rss_custom_headers(
             dialog.reset().await?;
             bot.send_message(chat_id, "Perfect! You are ready to go")
                 .await?;
-            return Ok(());
         }
         _ => {
             bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
