@@ -2,10 +2,13 @@ use std::sync::Arc;
 
 use lib_common::agent::optimize::ApproveOrDeny;
 use smol_str::SmolStr;
-use teloxide::types::MessageId;
+use teloxide::{
+    Bot,
+    types::{ChatId, Message, MessageId},
+};
 use tokio::sync::{RwLock, mpsc};
 
-use crate::db::subscription;
+use crate::{db::subscription, telegram::repmark};
 
 #[derive(Clone, Default)]
 pub enum State {
@@ -38,7 +41,7 @@ pub enum State {
 
 #[derive(Clone)]
 pub struct OptimizationTask {
-    pub prompt: MessageId,
+    pub prompt: Message,
     pub assignment: LlmAssignment,
 }
 
@@ -67,5 +70,11 @@ impl StateFeedback for State {
                 tasks: Default::default(),
             },
         }
+    }
+}
+
+impl OptimizationTask {
+    pub async fn reset_user_prompt(&self, bot: &Bot) {
+        repmark::remove_from_msg(&self.prompt, &bot).await;
     }
 }

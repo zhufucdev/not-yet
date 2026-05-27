@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
 
 use ::futures::future;
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 use app_common::config::ParseConfigPath;
 use clap::Parser;
 use futures::TryStreamExt;
@@ -39,7 +39,7 @@ use teloxide::{
     prelude::*,
 };
 use tokio::select;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::RwLock;
 use tracing::{Instrument, Level, event, info_span};
 use tracing_subscriber::EnvFilter;
 
@@ -773,7 +773,7 @@ async fn receive_feedback_msg(
                 .read()
                 .await
                 .iter()
-                .find_position(|t| t.prompt == reply.id)
+                .find_position(|t| t.prompt.id == reply.id)
             {
                 match &task.assignment {
                     LlmAssignment::Review { approve } => {
@@ -781,18 +781,20 @@ async fn receive_feedback_msg(
                             .send(ApproveOrDeny::Deny {
                                 reason: Some(msg_text),
                             })
-                            .await?
+                            .await?;
                     }
                     LlmAssignment::Clarify { send } => send.send(Some(msg_text)).await?,
                 }
                 tasks.write().await.remove(idx);
+                task.reset_user_prompt(&bot).await;
             } else {
                 let send_back = if let Some(quote) = reply.markdown_text() {
                     format!("> {}\n{}", quote.replace("\n", "\n> "), msg_text)
                 } else {
                     msg_text
                 };
-                match tasks.write().await.pop().unwrap().assignment {
+                let task = tasks.write().await.pop().unwrap();
+                match &task.assignment {
                     LlmAssignment::Review { approve } => {
                         approve
                             .send(ApproveOrDeny::Deny {
@@ -804,9 +806,11 @@ async fn receive_feedback_msg(
                         send.send(Some(send_back)).await?;
                     }
                 }
+                task.reset_user_prompt(&bot).await;
             }
         } else {
-            match tasks.write().await.pop().unwrap().assignment {
+            let task = tasks.write().await.pop().unwrap();
+            match &task.assignment {
                 LlmAssignment::Review { approve } => {
                     approve
                         .send(ApproveOrDeny::Deny {
@@ -818,8 +822,8 @@ async fn receive_feedback_msg(
                     send.send(Some(msg_text)).await?;
                 }
             }
+            task.reset_user_prompt(&bot).await;
         };
-        repmark::remove_from_msg(&msg, &bot).await;
     } else {
         event!(Level::TRACE, "state = start");
         if let Some(reply) = msg.reply_to_message() {
@@ -888,7 +892,7 @@ async fn receive_feedback_query(
             let guard = tasks.read().await;
             guard
                 .iter()
-                .find_position(|t| t.prompt == msg.id)
+                .find_position(|t| t.prompt.id == msg.id)
                 .map(|(idx, task)| (idx, task.clone()))
         })()
         .await
@@ -902,7 +906,7 @@ async fn receive_feedback_query(
                     .read()
                     .await
                     .iter()
-                    .map(|t| t.prompt)
+                    .map(|t| t.prompt.id)
                     .collect::<Vec<_>>()
             );
             return Ok(());
@@ -933,6 +937,7 @@ async fn receive_feedback_query(
                 }
             }
         }
+        task.reset_user_prompt(&bot).await;
         tasks.write().await.remove(idx);
         Ok(())
     }
@@ -976,27 +981,18 @@ where
             ("Deny", "n"),
         ]]))
         .await?;
-        let (proxy_tx, mut proxy_rx) = mpsc::channel(1);
         dialog
             .update(
                 dialog
                     .get_or_default()
                     .await?
                     .with_task_queued([OptimizationTask {
-                        prompt: prompt.id,
-                        assignment: LlmAssignment::Review {
-                            approve: proxy_tx.clone(),
-                        },
+                        prompt,
+                        assignment: LlmAssignment::Review { approve },
                     }])
                     .await,
             )
             .await?;
-        let bot = bot.clone();
-        tokio::spawn(async move {
-            let action = proxy_rx.recv().await.unwrap();
-            repmark::remove_from_msg(&prompt, &bot).await;
-            approve.send(action).await.unwrap();
-        });
         actions_required += 1;
     }
     if actions_required == 0 {

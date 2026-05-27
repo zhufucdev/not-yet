@@ -1,7 +1,10 @@
 use lib_common::agent::optimize::ClarificationReqHandler;
 use teloxide::{
-    Bot, dispatching::dialogue::InMemStorageError, payloads::SendMessageSetters,
-    prelude::Requester, types::ChatId,
+    Bot,
+    dispatching::dialogue::{GetChatId, InMemStorageError},
+    payloads::SendMessageSetters,
+    prelude::Requester,
+    types::ChatId,
 };
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -46,7 +49,7 @@ impl ClarificationReqHandler for TgClarReqHandler {
                     .get_or_default()
                     .await?
                     .with_task_queued([OptimizationTask {
-                        prompt: prompt_for_user.id,
+                        prompt: prompt_for_user.clone(),
                         assignment: LlmAssignment::Clarify { send: tx },
                     }])
                     .await,
@@ -55,7 +58,6 @@ impl ClarificationReqHandler for TgClarReqHandler {
         event!(target: "tg_clarhandler", Level::TRACE, "waiting for user response to clarification request...");
         let resposne = rx.recv().await.expect(CLOSED_CHANNEL_MSG);
         event!(target: "tg_clarhandler", Level::TRACE, "user reponse: {:?}", resposne);
-        repmark::remove_from_msg(&prompt_for_user, &self.bot).await;
         Ok(resposne)
     }
 }
