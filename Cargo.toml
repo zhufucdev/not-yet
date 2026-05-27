@@ -48,3 +48,4 @@ tracing = "0.1.44"
 default = ["dep:app-cli"]
 bot = ["dep:app-bot"]
 telegram = ["bot", "app-bot/telegram"]
+daemon = ["lib-common/daemon"]

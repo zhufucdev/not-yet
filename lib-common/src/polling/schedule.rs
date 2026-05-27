@@ -1,5 +1,6 @@
 use std::{
     collections::{BinaryHeap, HashMap, HashSet},
+    fmt::Debug,
     sync::Arc,
     time::Instant,
 };
@@ -21,7 +22,7 @@ use crate::polling::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Schedule<Key: KeyContract> {
+pub struct Schedule<Key> {
     id: usize,
     last_run: Option<Instant>,
     pub(super) trigger: _ScheduleTrigger,
@@ -38,6 +39,12 @@ pub struct Scheduler<K: KeyContract> {
         Arc<broadcast::Receiver<(QueueType, Arc<Schedule<K>>)>>,
     ),
 }
+
+#[cfg(all(feature = "daemon", target_os = "linux"))]
+const LOCKFILE_PATH: &str = "/tmp/not-yet.lock";
+
+#[cfg(all(feature = "daemon", target_os = "macos"))]
+const LOCKFILE_PATH: &str = "/tmp/not-yet.pid";
 
 #[derive(Debug, Clone)]
 pub enum QueueType {
@@ -183,6 +190,14 @@ impl<K: KeyContract> Scheduler<K> {
                 let due_time = expected_next.get_due_instant();
                 loop {
                     span.in_scope(|| event!(Level::DEBUG, "waiting for next run"));
+                    #[cfg(feature = "daemon")]
+                    match Self::lock().await {
+                        Ok(_) => {}
+                        Err(err) => {
+                            event!(Level::ERROR, "failed to lock daemon: {}", err);
+                            yield Err(TaskCancellationError);
+                        }
+                    }
                     tokio::select! {
                         schedule = reschedule_rx.recv() => {
                             if let Ok((_, schedule)) = schedule
@@ -220,6 +235,81 @@ impl<K: KeyContract> Scheduler<K> {
 
         while rx.try_recv().is_ok() {}
         Ok(rx.recv().await?.0)
+    }
+
+    #[cfg(feature = "daemon")]
+    pub async fn lock() -> Result<(), std::io::Error> {
+        use std::{io::ErrorKind, path::Path, process};
+
+        async fn handle_io_result<R, Fut>(f: impl Fn() -> Fut) -> Result<R, std::io::Error>
+        where
+            Fut: Future<Output = Result<R, std::io::Error>>,
+        {
+            loop {
+                match f().await {
+                    Ok(r) => return Ok(r),
+                    Err(err) => match err.kind() {
+                        ErrorKind::Interrupted
+                        | ErrorKind::AlreadyExists
+                        | ErrorKind::IsADirectory
+                        | ErrorKind::ResourceBusy
+                        | ErrorKind::PermissionDenied => {
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+                            event!(Level::DEBUG, "unable to lock {}: {err}", LOCKFILE_PATH);
+                        }
+                        _ => return Err(err),
+                    },
+                }
+            }
+        }
+
+        let path = Path::new(LOCKFILE_PATH);
+        let pid = process::id();
+        let pid_str = pid.to_string();
+        let pid_buf = pid_str.as_bytes();
+        while path.exists() {
+            use tokio::io::AsyncReadExt;
+
+            if handle_io_result(async || {
+                use sysinfo::{Pid, System};
+                use tokio::io::AsyncSeekExt;
+
+                let mut lockfile =
+                    handle_io_result(async || tokio::fs::File::open(path).await).await?;
+                let told_len = lockfile.seek(std::io::SeekFrom::End(0)).await?;
+                if told_len > 10 {
+                    return Ok(true);
+                }
+                // look at the pid file, if it's not alive then ignore it
+                let mut buf = String::new();
+                lockfile.seek(std::io::SeekFrom::Start(0)).await?;
+                lockfile.read_to_string(&mut buf).await?;
+                let Ok(told_pid) = buf.parse::<u32>() else {
+                    return Ok(true);
+                };
+                if told_pid == pid {
+                    return Ok(true);
+                }
+                let mut sys = System::new();
+                let told_pid = Pid::from_u32(told_pid);
+                sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[told_pid]), true);
+                let Some(_) = sys.process(told_pid) else {
+                    return Ok(true);
+                };
+
+                Ok(false)
+            })
+            .await?
+            {
+                return Ok(());
+            }
+
+            // spin lock
+            event!(Level::DEBUG, "unable to lock {}...", LOCKFILE_PATH);
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        }
+        handle_io_result(async || tokio::fs::write(path, pid_buf).await).await
     }
 }
 

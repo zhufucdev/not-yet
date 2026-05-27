@@ -62,7 +62,7 @@
           not-yet-telegram = final.callPackage (import ./nix/package.nix) {
             inherit craneLib;
             inherit version;
-            features = [ "telegram" ];
+            features = [ "telegram" "daemon" ];
           };
         };
 
