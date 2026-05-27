@@ -1,10 +1,7 @@
 {
   lib,
-  stdenv,
-  autoAddDriverRunpath,
   craneLib,
   rustPlatform,
-  cudaPackages,
   features ? [ ],
   pkg-config,
   openssl,
@@ -13,52 +10,26 @@
   ...
 }:
 let
-  cudaSupport = lib.elem "cuda" features;
-  effectiveStdenv = if cudaSupport then cudaPackages.backendStdenv else stdenv;
-
   # Use crane's built-in source cleaning
   xmlOrCargoSource =
     path: type: (builtins.match ".*/.*\\.xml$" path != null) || (craneLib.filterCargoSources path type);
-
-  cudaBuildInputs = with cudaPackages; [
-    cuda_cccl
-    cuda_cudart
-    libcublas
-  ];
 
   nativeBuildInputs = [
     pkg-config
     cmake
     rustPlatform.bindgenHook
-  ]
-  ++ lib.optionals cudaSupport [
-    cudaPackages.cuda_nvcc
-    autoAddDriverRunpath
   ];
 
   buildInputs = [
     openssl
-  ]
-  ++ lib.optionals cudaSupport cudaBuildInputs;
-
-  env = lib.optionalAttrs cudaSupport {
-    CUDA_COMPUTE_CAP = "89";
-    RUSTFLAGS = builtins.concatStringsSep " " [
-      "-L ${cudaPackages.cuda_cudart}/lib"
-      "-L ${cudaPackages.cuda_cudart}/lib/stubs"
-      "-L ${cudaPackages.libcublas.lib}/lib"
-      "-L ${cudaPackages.libcublas.static}/lib"
-    ];
-  };
+  ];
 
   # Common args shared between dep-only and full builds
   commonArgs = {
     inherit
       nativeBuildInputs
       buildInputs
-      env
       ;
-    stdenv = p: effectiveStdenv;
 
     cargoExtraArgs = lib.concatMapStringsSep " " (f: "--features ${f}") features;
     # Tell crane not to run tests in the build phase

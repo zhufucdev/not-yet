@@ -53,24 +53,17 @@
         final: prev:
         let
           craneLib = crane.mkLib final;
-          gpuFeatures = if final.stdenv.hostPlatform.isDarwin then [ "metal" ] else [ "cuda" ];
         in
         {
-          not-yet =
-            final.callPackage (import ./nix/package.nix) {
-              inherit craneLib;
-              inherit version;
-              features = gpuFeatures;
-            }
-            // {
-              telegram = final.callPackage (import ./nix/package.nix) {
-                inherit craneLib;
-                inherit version;
-                features = gpuFeatures ++ [
-                  "telegram"
-                ];
-              };
-            };
+          not-yet = final.callPackage (import ./nix/package.nix) {
+            inherit craneLib;
+            inherit version;
+          };
+          not-yet-telegram = final.callPackage (import ./nix/package.nix) {
+            inherit craneLib;
+            inherit version;
+            features = [ "telegram" ];
+          };
         };
 
       # Provide some binary packages for selected system types.
@@ -80,23 +73,16 @@
 
       # A NixOS module, if applicable (e.g. if the package provides a system service).
       nixosModules.cli =
-        { pkgs, ... }:
+        { ... }:
         {
           nixpkgs.overlays = [ self.overlay ];
-
-          environment.systemPackages = [ pkgs.not-yet ];
-
-          #systemd.services = { ... };
         };
 
       nixosModules.telegram =
-        { pkgs, ... }:
+        { ... }:
         {
+          imports = [ ./nix/module.nix ];
           nixpkgs.overlays = [ self.overlay ];
-
-          environment.systemPackages = [ pkgs.not-yet.telegram ];
-
-          #systemd.services = { ... };
         };
 
       # Tests run by 'nix flake check' and by Hydra.
