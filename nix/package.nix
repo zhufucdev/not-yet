@@ -58,5 +58,8 @@ craneLib.buildPackage (
       name = "source";
     };
     APP_VERSION = version;
+    meta = {
+      mainProgram = "not_yet";
+    };
   }
 )
