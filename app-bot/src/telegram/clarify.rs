@@ -1,4 +1,4 @@
-use lib_common::agent::optimize::gemma4::ClarificationReqHandler;
+use lib_common::agent::optimize::ClarificationReqHandler;
 use teloxide::{
     Bot, dispatching::dialogue::InMemStorageError, payloads::SendMessageSetters,
     prelude::Requester, types::ChatId,

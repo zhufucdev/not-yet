@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use llama_runner::ImageOrText;
 use quick_xml::events::Event;
 
-use crate::{agent::error::TemplateExpansionError, llm::SharedImageOrText};
+use crate::{agent::error::TemplateExpansionError, source::SharedImageOrText};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TagKind {
@@ -84,13 +83,4 @@ pub fn expand_prompt(
         }
     }
     Ok(messages)
-}
-
-impl<'i> Into<ImageOrText<'i>> for &'i SharedImageOrText {
-    fn into(self) -> ImageOrText<'i> {
-        match self {
-            SharedImageOrText::Image(dynamic_image) => ImageOrText::Image(dynamic_image),
-            SharedImageOrText::Text(text) => ImageOrText::Text(&text),
-        }
-    }
 }

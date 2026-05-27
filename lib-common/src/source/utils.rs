@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use tracing::{Level, event};
 
-use crate::{llm::SharedImageOrText, serde_utils::DynImageConverter};
+use crate::{serde_utils::DynImageConverter, source::SharedImageOrText};
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]

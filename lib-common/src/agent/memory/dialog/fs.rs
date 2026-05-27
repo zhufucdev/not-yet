@@ -4,6 +4,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::fs;
 
+#[derive(Clone)]
 pub struct FsDialogMemory<D> {
     file_path: PathBuf,
     _marker: std::marker::PhantomData<D>,

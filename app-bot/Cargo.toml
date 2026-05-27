@@ -22,10 +22,8 @@ serde.workspace = true
 itertools = "0.14.0"
 futures.workspace = true
 reqwest.workspace = true
-llama-runner.workspace = true
 async-stream.workspace = true
+ollama-rs.workspace = true
 
 [features]
-cuda = ["lib-common/cuda"]
-metal = ["lib-common/metal"]
 telegram = ["dep:teloxide"]

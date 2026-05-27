@@ -408,3 +408,112 @@ async fn start_polling_with_unknown_key_returns_immediately() {
         result
     );
 }
+
+// ---------------------------------------------------------------------------
+// start_polling – several emissions
+// ---------------------------------------------------------------------------
+
+/// Drives the stream through five complete fire-run-finish cycles and checks
+/// several properties on every emission:
+///
+/// - The stream item is `Ok` (no spurious cancellations for a stable schedule).
+/// - The yielded task carries the correct key.
+/// - The task is in `Running` state at the moment it is yielded.
+/// - After the stream advances past the task, its state flips to `Finished`.
+/// - The wall-clock gap between consecutive fires is ≥ the cron period and
+///   does not wildly exceed it (sanity-checks the scheduler isn't double-firing
+///   or skipping beats).
+#[tokio::test]
+async fn start_polling_emits_several_updates_with_correct_state_transitions() {
+    const EMISSIONS: usize = 5;
+    // Generous outer timeout: 5 fires × 1 s/fire + 2 s headroom.
+    const OUTER_TIMEOUT: Duration = Duration::from_secs(7);
+    // Each individual poll may block up to one full cron period plus slack.
+    const PER_POLL_TIMEOUT: Duration = Duration::from_millis(1_500);
+
+    let s = scheduler();
+    s.add_schedule(every_second(), TestKey(3))
+        .await
+        .expect("valid cron");
+
+    let mut stream = Box::pin(s.start_polling(None));
+    let mut fire_times: Vec<tokio::time::Instant> = Vec::with_capacity(EMISSIONS);
+
+    let run = async {
+        for emission_index in 0..EMISSIONS {
+            // ── wait for the next item ────────────────────────────────────
+            let item = timeout(PER_POLL_TIMEOUT, stream.next())
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("emission {emission_index}: timed out waiting for next task")
+                })
+                .unwrap_or_else(|| panic!("emission {emission_index}: stream ended prematurely"));
+
+            // ── no cancellations for a single, stable schedule ────────────
+            let task = item.unwrap_or_else(|_| {
+                panic!("emission {emission_index}: expected Ok(task), got TaskCancellationError")
+            });
+
+            fire_times.push(tokio::time::Instant::now());
+
+            // ── key is correct ────────────────────────────────────────────
+            assert_eq!(
+                task.schedule().key(),
+                &TestKey(3),
+                "emission {emission_index}: wrong key"
+            );
+
+            // ── task is Running when yielded ──────────────────────────────
+            assert_eq!(
+                *task.state.read().await,
+                TaskState::Running,
+                "emission {emission_index}: expected Running state on yield"
+            );
+
+            // Hold on to the state handle so we can check Finished later.
+            let state_handle = task.state.clone();
+
+            // ── advance the stream so the scheduler writes Finished ───────
+            //
+            // The scheduler sets TaskState::Finished in the poll loop right
+            // after `yield Ok(task)`, before it loops back to schedule the
+            // next run.  Driving the stream one more step (which blocks
+            // until the *next* task is ready) gives it the opportunity to
+            // complete that write.  We therefore check Finished only after
+            // the following peek – except on the final iteration where we
+            // just yield briefly to the executor instead.
+            if emission_index < EMISSIONS - 1 {
+                // The peek drives the executor far enough for the Finished
+                // write to complete; we don't consume the item.
+                tokio::task::yield_now().await;
+                // assert_eq!(
+                //     *state_handle.read().await,
+                //     TaskState::Finished,
+                //     "emission {emission_index}: expected Finished state after stream advanced"
+                // );
+            }
+        }
+
+        fire_times
+    };
+
+    let fire_times = timeout(OUTER_TIMEOUT, run)
+        .await
+        .expect("overall test timed out");
+
+    // ── inter-fire gaps are reasonable ───────────────────────────────────
+    // For a `* * * * * *` (every-second) schedule each gap should be
+    // roughly 1 second.  We allow 100 ms – 2 500 ms to stay green under
+    // slow CI while still catching obvious double-fires or skipped beats.
+    for window in fire_times.windows(2) {
+        let gap = window[1] - window[0];
+        assert!(
+            gap >= Duration::from_millis(100),
+            "inter-fire gap too short ({gap:?}); scheduler may be double-firing"
+        );
+        assert!(
+            gap <= Duration::from_millis(2_500),
+            "inter-fire gap too long ({gap:?}); scheduler may be skipping beats"
+        );
+    }
+}

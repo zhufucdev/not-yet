@@ -10,10 +10,8 @@ use tracing::{Instrument, Level, debug_span, event};
 
 use crate::{
     agent::memory::decision::material,
-    llm::SharedImageOrText,
     source::{
-        DefaultMetadata, Feed, LlmComprehendable,
-        utils::{self, UrlContent},
+        DefaultMetadata, Feed, LlmComprehendable, SharedImageOrText, utils::{self, UrlContent}
     },
     update::Updatable,
 };

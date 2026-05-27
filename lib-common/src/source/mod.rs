@@ -1,8 +1,9 @@
 use std::{cmp::max, sync::Arc};
 
 use escaping::Escape;
-use serde::Serialize;
-use smol_str::SmolStr;
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
+use smol_str::{SmolStr, ToSmolStr};
 
 pub mod atom;
 pub mod rss;
@@ -10,7 +11,15 @@ pub mod utils;
 
 pub use rss::{LlmRssItem, RssFeed};
 
-use crate::{agent::memory::decision::material, llm::SharedImageOrText, update::Updatable};
+use crate::serde_utils::DynImageConverter;
+use crate::{agent::memory::decision::material, update::Updatable};
+
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum SharedImageOrText {
+    Image(#[serde_as(as = "Arc<DynImageConverter>")] Arc<image::DynamicImage>),
+    Text(SmolStr),
+}
 
 pub trait LlmComprehendable {
     const KIND: Option<material::Kind> = None;
@@ -147,5 +156,41 @@ impl LlmComprehendable for DefaultMetadata {
             self.name.clone()
         };
         vec![msg.into()]
+    }
+}
+
+impl From<SmolStr> for SharedImageOrText {
+    fn from(value: SmolStr) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<&str> for SharedImageOrText {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_smolstr())
+    }
+}
+
+impl From<String> for SharedImageOrText {
+    fn from(value: String) -> Self {
+        Self::Text(value.to_smolstr())
+    }
+}
+
+impl From<&String> for SharedImageOrText {
+    fn from(value: &String) -> Self {
+        Self::Text(value.to_smolstr())
+    }
+}
+
+impl From<image::DynamicImage> for SharedImageOrText {
+    fn from(value: image::DynamicImage) -> Self {
+        Self::Image(Arc::new(value))
+    }
+}
+
+impl From<Arc<image::DynamicImage>> for SharedImageOrText {
+    fn from(value: Arc<image::DynamicImage>) -> Self {
+        Self::Image(value)
     }
 }

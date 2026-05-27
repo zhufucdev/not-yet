@@ -12,9 +12,8 @@ use reqwest::header::{HeaderMap, HeaderName};
 
 use crate::{
     agent::memory::decision::material,
-    llm::SharedImageOrText,
     source::{
-        DefaultMetadata, Feed, LlmComprehendable,
+        DefaultMetadata, Feed, LlmComprehendable, SharedImageOrText,
         utils::{self, UrlContent},
     },
     update::Updatable,

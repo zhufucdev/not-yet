@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use lib_common::agent::optimize::gemma4::ScheduleParamterAccessor;
+use lib_common::agent::optimize::ScheduleParamterAccessor;
 use lib_common::polling::trigger::ScheduleTrigger;
-use sea_orm::{prelude::*, strum};
+use sea_orm::prelude::*;
 
 use crate::UserId;
 use crate::db::{atom, rss};
@@ -35,7 +35,7 @@ pub struct Model {
     pub atom: HasOne<atom::Entity>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, strum::Display)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, DeriveDisplay)]
 #[sea_orm(rs_type = "i32", db_type = "Integer")]
 pub enum Kind {
     #[strum(to_string = "RSS")]

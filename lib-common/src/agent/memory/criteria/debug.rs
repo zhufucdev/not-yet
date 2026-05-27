@@ -25,7 +25,7 @@ impl super::CriteriaMemory for DebugCriteriaMemory {
         Ok(self.criteria.iter().map(|c| c.as_str()).collect())
     }
 
-    async fn add(&mut self, criteria: impl AsRef<str> + Send) -> Result<(), Self::Error> {
+    async fn add(&mut self, criteria: impl AsRef<str> + Send + Sync) -> Result<(), Self::Error> {
         self.criteria.push(criteria.as_ref().to_string());
         Ok(())
     }

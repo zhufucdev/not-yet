@@ -11,20 +11,21 @@ use lib_common::agent::decision::Decider;
 use lib_common::agent::error::GetTruthValueError;
 use lib_common::agent::memory::criteria::sqlite::SqliteCriteriaMemory;
 use lib_common::agent::memory::decision::DecisionMemory;
+use lib_common::agent::memory::dialog::DialogMemory;
 use lib_common::agent::memory::dialog::fs::FsDialogMemory;
-use lib_common::agent::optimize::gemma4::Gemma4Optimizer;
-use lib_common::agent::optimize::{ApproveOrDeny, OptimizationCallback, OptimizerAction};
-use lib_common::llm::dialog::gemma4;
+use lib_common::agent::optimize::llm::LlmOptimizer;
+use lib_common::agent::optimize::{
+    ApproveOrDeny, OptimizationCallback, Optimizer, OptimizerAction,
+};
+use lib_common::runner::OllamaRunner;
+use lib_common::secure;
 use lib_common::{
     agent::{LlmConditionMatcher, memory::decision::SqliteDecisionMemory},
-    llm::timeout::TimedModel,
     polling::{Schedule, Scheduler, schedule::QueueType},
     source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed, atom::AtomFeed},
     update::sqlite::SqliteUpdatePersistence,
 };
-use lib_common::{llm, secure};
-use llama_runner::Gemma4VisionRunner;
-use llama_runner::{RunnerWithRecommendedSampling, error::CreateLlamaCppRunnerError};
+use ollama_rs::generation::chat::ChatMessage;
 use sea_orm::{ActiveEnum, ColumnTrait, DatabaseConnection, EntityTrait, Iterable, QueryFilter};
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::SmolStr;
@@ -108,6 +109,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
             .into_iter()
             .collect::<Scheduler<SubscriptionId>>(),
     );
+    let runner = OllamaRunner::default();
 
     future::select(
         Box::pin(
@@ -117,6 +119,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
                     token,
                     db.clone(),
                     data_path.clone(),
+                    runner.clone(),
                     Arc::new(Authenticator::from((
                         WhitelistAuthenticator::new(
                             config.whitelist.unwrap_or_default(),
@@ -134,7 +137,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
             async {
                 loop {
                     select! {
-                        result = start_polling_all(scheduler.clone(), llm::DEFAULT_MODEL.clone(), &db, &data_path, &bot) => {
+                        result = start_polling_all(scheduler.clone(), &runner, &db, &data_path, &bot) => {
                             match result {
                                 Ok(_) => {
                                     event!(
@@ -218,13 +221,12 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
 
 async fn start_polling_all(
     scheduler: Arc<Scheduler<SubscriptionId>>,
-    model: TimedModel<RunnerWithRecommendedSampling<Gemma4VisionRunner>, CreateLlamaCppRunnerError>,
+    runner: &OllamaRunner,
     db: &DatabaseConnection,
     working_dir: &Path,
     bot: &Bot,
 ) -> anyhow::Result<()> {
     let tasks = scheduler.schedules().await.into_iter().map(|schedule| {
-        let model = model.clone();
         let scheduler = scheduler.clone();
         let sub_id = *schedule.key();
         async move {
@@ -246,7 +248,7 @@ async fn start_polling_all(
                         &feed,
                         feed.url(),
                         &sub,
-                        model,
+                        &runner,
                         &scheduler,
                         db,
                         working_dir,
@@ -260,7 +262,7 @@ async fn start_polling_all(
                         &feed,
                         feed.url(),
                         &sub,
-                        model,
+                        &runner,
                         &scheduler,
                         db,
                         working_dir,
@@ -282,7 +284,7 @@ async fn send_update_messages<Feed_>(
     feed: &Feed_,
     feed_url: &str,
     sub: &subscription::Model,
-    model: TimedModel<RunnerWithRecommendedSampling<Gemma4VisionRunner>, CreateLlamaCppRunnerError>,
+    runner: &OllamaRunner,
     scheduler: &Scheduler<SubscriptionId>,
     db: &DatabaseConnection,
     working_dir: &Path,
@@ -311,7 +313,7 @@ where
             let mut decision_mem =
                 SqliteDecisionMemory::new(db.clone(), working_dir, Some(sub_id))?;
             let decider = LlmConditionMatcher::new(
-                model.clone(),
+                runner.clone(),
                 sub.condition.to_string(),
                 decision_mem.clone(),
                 FsDialogMemory::new(working_dir, &dialog_id),
@@ -409,6 +411,7 @@ async fn start(
                     .chunks(2)
                     .into_iter()
                     .map(|chunk| chunk.collect::<Vec<_>>())
+                    .chain([vec![("Cancel".to_string(), "cancel".to_string())]])
                     .collect::<Vec<_>>(),
             ))
             .await?;
@@ -491,6 +494,18 @@ async fn chose_subscription_type(
     query: CallbackQuery,
     dialog: MasterDialog,
 ) -> anyhow::Result<()> {
+    if query.data.as_ref().is_some_and(|it| it == "cancel") {
+        dialog.reset().await?;
+        repmark::remove(&query, &bot).await;
+        if let Some(message) = query.regular_message() {
+            bot.edit_message_text(
+                query.chat_id().unwrap(),
+                message.id,
+                "I have canceled your request. Feel free to try again anytime!",
+            ).await?;
+        }
+        return Ok(());
+    }
     let Some(kind_hex) = &query.data else {
         bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
             .await?;
@@ -738,6 +753,7 @@ async fn receive_feedback_msg(
     bot: Bot,
     msg: Message,
     db: DatabaseConnection,
+    runner: OllamaRunner,
     dialog: MasterDialog,
     working_dir: PathBuf,
 ) -> anyhow::Result<()> {
@@ -820,14 +836,16 @@ async fn receive_feedback_msg(
                 .await?;
                 return Ok(());
             };
-            let optimizer = Arc::new(Gemma4Optimizer::new(
-                llm::DEFAULT_MODEL.clone(),
-                FsDialogMemory::<gemma4::Dialog>::new(working_dir, model.dialog_id),
+            let dialog_mem = FsDialogMemory::<Vec<ChatMessage>>::new(working_dir, model.dialog_id);
+            let optimizer = Arc::new(LlmOptimizer::new(
+                runner,
+                dialog_mem.clone(),
                 SqliteCriteriaMemory::new(db.clone(), Some(model.subscription_id)),
                 clarify::TgClarReqHandler::new(bot.clone(), chat_id, dialog.clone()),
                 subscription::ModelParamterAccessor::new(db.clone(), sub),
             ));
-            if let Some(optimization) = optimizer.optimize_inplace(msg.text()).await? {
+            if let Some(decision_dialog) = dialog_mem.get().await? {
+                let optimization = optimizer.optimize(msg.text(), decision_dialog);
                 dialog
                     .update(State::Feedingback {
                         tasks: Default::default(),

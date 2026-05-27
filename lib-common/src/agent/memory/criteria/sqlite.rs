@@ -44,7 +44,7 @@ impl super::CriteriaMemory for SqliteCriteriaMemory {
         Ok(criteria.into_iter().map(|c| c.content).collect())
     }
 
-    async fn add(&mut self, criteria: impl AsRef<str> + Send) -> Result<(), Self::Error> {
+    async fn add(&mut self, criteria: impl AsRef<str> + Send + Sync) -> Result<(), Self::Error> {
         ActiveModel::builder()
             .set_agent_id(self.agent_id.clone())
             .set_content(criteria.as_ref().to_string())

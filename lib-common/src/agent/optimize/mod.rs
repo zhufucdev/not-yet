@@ -2,7 +2,8 @@ use std::{fmt::Display, sync::Arc};
 
 use tokio::sync::mpsc;
 
-pub mod gemma4;
+pub mod llm;
+
 #[cfg(test)]
 mod test;
 
@@ -13,9 +14,9 @@ mod test;
 pub trait Optimizer<Dialog> {
     type Error;
     fn optimize(
-        self: &Arc<Self>,
+        &self,
         prompt: Option<impl ToString + Send>,
-        dialog: &Dialog,
+        dialog: Dialog,
     ) -> OptimizationCallback<Self::Error>;
 }
 
@@ -40,6 +41,23 @@ pub struct OptimizationCallback<Error> {
 pub struct ScheduleParamters {
     pub interval_mins: Option<u32>,
     pub buffer_size: Option<usize>,
+}
+
+#[trait_variant::make(Send)]
+pub trait ScheduleParamterAccessor {
+    type Error: std::error::Error;
+
+    async fn get_interval_mins(&self) -> u32;
+    async fn set_interval_mins(&mut self, new_value: u32) -> Result<(), Self::Error>;
+
+    async fn get_buffer_size(&self) -> usize;
+    async fn set_buffer_size(&mut self, new_value: usize) -> Result<(), Self::Error>;
+}
+
+#[trait_variant::make(Send)]
+pub trait ClarificationReqHandler {
+    type Error: std::error::Error;
+    async fn on_request(&self, prompt: &str) -> Result<Option<String>, Self::Error>;
 }
 
 impl<Error> OptimizationCallback<Error> {

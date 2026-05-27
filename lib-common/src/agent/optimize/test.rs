@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use llama_runner::Gemma4VisionRunner;
 use ntest::timeout;
 use tokio::sync::{RwLock, mpsc};
 use tracing::event;
@@ -13,18 +12,11 @@ use crate::{
             dialog::{DialogMemory, debug::DebugDialogMemory},
         },
         optimize::{
-            self, ApproveOrDeny, OptimizationCallback, Optimizer, OptimizerAction,
-            gemma4::{ClarificationReqHandler, Gemma4Optimizer, ScheduleParamterAccessor},
+            self, ApproveOrDeny, ClarificationReqHandler, OptimizationCallback, Optimizer,
+            OptimizerAction, ScheduleParamterAccessor, llm::LlmOptimizer,
         },
     },
     error::NaE,
-    llm::{
-        dialog::{
-            gemma4::{self, ToolResponse},
-            toolcall,
-        },
-        owned::OwnedModel,
-    },
     polling::schedule,
 };
 
@@ -134,7 +126,7 @@ async fn optimize_criteria() {
         buffer_size: usize::MAX,
     };
 
-    let optimizer = Arc::new(Gemma4Optimizer::new(
+    let optimizer = Arc::new(LlmOptimizer::new(
         OwnedModel::new(Gemma4VisionRunner::default().await.unwrap()),
         dialog_mem,
         criteria_mem,

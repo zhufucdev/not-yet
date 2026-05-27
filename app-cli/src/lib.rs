@@ -3,18 +3,14 @@ use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     io::{Write, stdout},
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::Duration,
-    usize,
 };
 
 use anyhow::anyhow;
 use app_common::config::ParseConfigPath;
 use clap::Parser;
 use futures::{StreamExt, future, pin_mut};
-use llama_runner::{
-    Gemma3VisionRunner, RunnerWithRecommendedSampling, error::CreateLlamaCppRunnerError,
-};
 use migration::prelude::serde_json;
 use sea_orm::DatabaseConnection;
 use serde::{Serialize, de::DeserializeOwned};
@@ -30,14 +26,13 @@ use lib_common::{
     agent::{
         Decider, LlmConditionMatcher,
         memory::{
-            criteria::debug::DebugCriteriaMemory,
-            decision::SqliteDecisionMemory,
-            dialog::{debug::DebugDialogMemory, fs::FsDialogMemory},
+            criteria::debug::DebugCriteriaMemory, decision::SqliteDecisionMemory,
+            dialog::debug::DebugDialogMemory,
         },
     },
-    llm::timeout::{ModelProducer, TimedModel},
     polling::{self, Scheduler, trigger::ScheduleTrigger},
-    source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed},
+    runner::OllamaRunner,
+    source::{DefaultMetadata, Feed, LlmComprehendable},
     update::{accept::AcceptUpdatePersistence, sqlite::SqliteUpdatePersistence},
 };
 
@@ -60,13 +55,9 @@ pub async fn main() -> anyhow::Result<()> {
         include_bytes!("../asset/default_config.toml"),
     )
     .await?;
+    let runner = OllamaRunner::default();
 
     async {
-        let model = TimedModel::new(
-            "decider_vlm",
-            config.drop_model_in.clone(),
-            ModelProducer::new(|| async { Gemma3VisionRunner::default().await }),
-        );
         let db = app_common::config::setup_db(&data_path).await?;
         let scheduler = Scheduler::new();
         let (run_mode, subscriptions) = parse_args_config(args, config)?;
@@ -82,7 +73,7 @@ pub async fn main() -> anyhow::Result<()> {
                                 &scheduler,
                                 sub,
                                 conf.to_feed()?,
-                                &model,
+                                &runner,
                                 sub.buffer_size,
                                 &db,
                                 &data_path,
@@ -94,7 +85,7 @@ pub async fn main() -> anyhow::Result<()> {
                                 &scheduler,
                                 sub,
                                 conf.to_feed()?,
-                                &model,
+                                &runner,
                                 sub.buffer_size,
                                 &db,
                                 &data_path,
@@ -136,7 +127,7 @@ pub async fn main() -> anyhow::Result<()> {
                                         sub,
                                         sub_id,
                                         conf.to_feed()?,
-                                        &model,
+                                        &runner,
                                         sub.buffer_size,
                                         &db,
                                         &data_path,
@@ -149,7 +140,7 @@ pub async fn main() -> anyhow::Result<()> {
                                         sub,
                                         sub_id,
                                         conf.to_feed()?,
-                                        &model,
+                                        &runner,
                                         sub.buffer_size,
                                         &db,
                                         &data_path,
@@ -176,10 +167,7 @@ async fn oneshot<Feed_>(
     scheduler: &Scheduler<Subscription>,
     sub: &Subscription,
     feed: Feed_,
-    model: &TimedModel<
-        RunnerWithRecommendedSampling<Gemma3VisionRunner>,
-        CreateLlamaCppRunnerError,
-    >,
+    runner: &OllamaRunner,
     buffer_size: usize,
     db: &DatabaseConnection,
     data_path: &PathBuf,
@@ -193,7 +181,7 @@ where
         .add_schedule(ScheduleTrigger::Interval(Duration::ZERO), sub.clone())
         .await?;
     let decider = LlmConditionMatcher::new(
-        model.clone(),
+        runner.clone(),
         &sub.condition,
         SqliteDecisionMemory::new(db.clone(), &data_path, None)?,
         DebugDialogMemory::new(),
@@ -203,7 +191,6 @@ where
     // TODO:oneshot should return immediately when there is no new update
     let updates = app_common::feed::check(sub, &feed, &scheduler, persistence, buffer_size);
     pin_mut!(updates);
-    let mut stdout_guard = stdout().lock();
     if let Some(result) = updates.next().await {
         let (Some(update), task) = result? else {
             return Ok(());
@@ -214,6 +201,7 @@ where
             "schedule id = {}, is_truthy = {is_truthy}",
             task.schedule().id()
         );
+        let mut stdout_guard = stdout().lock();
         if is_truthy {
             writeln!(&mut stdout_guard, "vivid")?;
         } else {
@@ -228,10 +216,7 @@ async fn daemon<Feed_>(
     sub: &Subscription,
     sub_id: usize,
     feed: Feed_,
-    model: &TimedModel<
-        RunnerWithRecommendedSampling<Gemma3VisionRunner>,
-        CreateLlamaCppRunnerError,
-    >,
+    runner: &OllamaRunner,
     buffer_size: usize,
     db: &DatabaseConnection,
     data_path: &PathBuf,
@@ -242,7 +227,7 @@ where
     Feed_::Error: Display,
 {
     let decider = LlmConditionMatcher::new(
-        model.clone(),
+        runner.clone(),
         sub.condition.clone(),
         SqliteDecisionMemory::new(db.clone(), data_path.clone(), None)?,
         DebugDialogMemory::new(),
@@ -269,7 +254,7 @@ where
                 let is_truthy = decider.get_truth_value(&update).await?;
                 let mut stdout_guard = stdout().lock();
                 if is_truthy {
-                    serde_json::to_writer(
+                    _ = serde_json::to_writer(
                         &mut stdout_guard,
                         &Message {
                             subscription_id: sub_id,
@@ -287,7 +272,7 @@ where
             }
             Ok((None, _)) => {
                 let mut stdout_guard = stdout().lock();
-                serde_json::to_writer(
+                _ = serde_json::to_writer(
                     &mut stdout_guard,
                     &Message {
                         subscription_id: sub_id,

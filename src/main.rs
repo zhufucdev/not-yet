@@ -14,7 +14,7 @@ async fn main() {
     match flavor::main().await {
         Ok(()) => {}
         Err(err) => {
-            tracing::error!("main thread existed unexpectedly: {err}");
+            tracing::error!("main thread exited unexpectedly: {err}");
             exit(1);
         }
     }
