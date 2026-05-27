@@ -74,7 +74,7 @@ impl MigrationTrait for Migration {
                     .table(Update::Table)
                     .if_not_exists()
                     .col(pk_auto(Update::Id))
-                    .col(string(Update::Key).not_null().unique_key())
+                    .col(string(Update::Key).not_null())
                     .col(big_unsigned(Update::Hash).not_null())
                     .to_owned(),
             )
