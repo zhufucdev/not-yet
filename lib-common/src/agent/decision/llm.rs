@@ -19,7 +19,10 @@ use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, future};
 use ollama_rs::{
     error::OllamaError,
-    generation::chat::{ChatMessage, MessageRole},
+    generation::{
+        chat::{ChatMessage, MessageRole},
+        parameters::ThinkType,
+    },
 };
 use smol_str::ToSmolStr;
 use tokio::{pin, sync::RwLock};
@@ -156,7 +159,10 @@ where
         let response: Result<String, Self::Error> = async {
             let request_msgs = self.get_messages(update).await?;
             let history = OllamaSharedChatHistory::new(vec![]);
-            let mut coordinator = self.runner.to_coordinator(history.clone());
+            let mut coordinator = self
+                .runner
+                .to_coordinator(history.clone())
+                .think(ThinkType::True);
             let res = coordinator
                 .chat(vec![ollama::chat_message_from_shared(
                     request_msgs,
