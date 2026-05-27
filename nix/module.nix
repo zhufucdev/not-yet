@@ -68,7 +68,7 @@ in
       groups.${cfg.group} = { };
     };
     systemd.services.not-yet = {
-      description = "not-yet telegram bot daemon, a LLM based notification control app";
+      description = "not-yet telegram bot daemon, an LLM based notification control app";
       requires = [ "network-online.target" ];
       after = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
