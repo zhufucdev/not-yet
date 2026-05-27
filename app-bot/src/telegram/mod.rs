@@ -39,7 +39,7 @@ use teloxide::{
     prelude::*,
 };
 use tokio::select;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use tracing::{Instrument, Level, event, info_span};
 use tracing_subscriber::EnvFilter;
 
@@ -502,7 +502,8 @@ async fn chose_subscription_type(
                 query.chat_id().unwrap(),
                 message.id,
                 "I have canceled your request. Feel free to try again anytime!",
-            ).await?;
+            )
+            .await?;
         }
         return Ok(());
     }
@@ -925,7 +926,6 @@ async fn receive_feedback_query(
             },
             LlmAssignment::Clarify { send } => {
                 if data.as_str() == "n" {
-                    repmark::remove(&query, &bot).await;
                     send.send(None).await?;
                 } else {
                     bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
@@ -951,11 +951,7 @@ where
 {
     bot.send_message(chat_id, "Working on it...").await?;
     let mut actions_required = 0;
-    while let Some((action, approve)) = optimization
-        .accept()
-        .await
-        .context("optimization channel closed")?
-    {
+    while let Ok(Some((action, approve))) = optimization.accept().await {
         let prompt = match action {
             OptimizerAction::ContextPrefill(context) => bot.send_message(
                 chat_id,
@@ -980,6 +976,7 @@ where
             ("Deny", "n"),
         ]]))
         .await?;
+        let (proxy_tx, mut proxy_rx) = mpsc::channel(1);
         dialog
             .update(
                 dialog
@@ -987,17 +984,25 @@ where
                     .await?
                     .with_task_queued([OptimizationTask {
                         prompt: prompt.id,
-                        assignment: LlmAssignment::Review { approve },
+                        assignment: LlmAssignment::Review {
+                            approve: proxy_tx.clone(),
+                        },
                     }])
                     .await,
             )
             .await?;
+        let bot = bot.clone();
+        tokio::spawn(async move {
+            let action = proxy_rx.recv().await.unwrap();
+            repmark::remove_from_msg(&prompt, &bot).await;
+            approve.send(action).await.unwrap();
+        });
         actions_required += 1;
     }
     if actions_required == 0 {
         bot.send_message(
             chat_id,
-            "No actions were taken. Thank you anyway, and feel free to retry next time!",
+            "No actions were taken. Thank you for cooperation, and feel free to retry next time!",
         )
         .await?;
     } else {

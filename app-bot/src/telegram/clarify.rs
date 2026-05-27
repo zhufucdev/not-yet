@@ -52,7 +52,11 @@ impl ClarificationReqHandler for TgClarReqHandler {
                     .await,
             )
             .await?;
-        Ok(rx.recv().await.expect(CLOSED_CHANNEL_MSG))
+        event!(target: "tg_clarhandler", Level::TRACE, "waiting for user response to clarification request...");
+        let resposne = rx.recv().await.expect(CLOSED_CHANNEL_MSG);
+        event!(target: "tg_clarhandler", Level::TRACE, "user reponse: {:?}", resposne);
+        repmark::remove_from_msg(&prompt_for_user, &self.bot).await;
+        Ok(resposne)
     }
 }
 

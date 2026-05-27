@@ -14,6 +14,7 @@ use ollama_rs::{
     },
     history::ChatHistory,
 };
+use rmcp::model::EmptyObject;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
@@ -112,7 +113,7 @@ struct GetCriteria<Criteria> {
     criteria: Arc<RwLock<Criteria>>,
 }
 
-struct RequestClarification<Ch> {
+struct RequireClarification<Ch> {
     handler: Arc<Ch>,
 }
 
@@ -137,6 +138,7 @@ where
     ) -> OptimizationCallback<Self::Error> {
         const DEFAULT_PROMPT: &str = "I don't like this post.";
         let prompt = prompt.map(|p| p.to_string());
+        event!(Level::TRACE, "prompt = {prompt:?}, history = {:#?}", dialog);
 
         let state = Arc::new(RwLock::new(State {
             checked: dialog
@@ -193,7 +195,7 @@ where
                     state: state.clone(),
                     criteria: criteria_mem.clone(),
                 })
-                .add_tool(RequestClarification {
+                .add_tool(RequireClarification {
                     handler: clarification_handler.clone(),
                 });
             let mut res = coordinator
@@ -228,7 +230,6 @@ where
                 .await?;
 
             loop {
-                event!(Level::DEBUG, "model: {:#?}", res);
                 dialog_mem
                     .write()
                     .await
@@ -259,9 +260,13 @@ where
                             "s"
                         },
                     );
+                    event!(Level::TRACE, "state: {:#?}", state);
+                    event!(Level::TRACE, "history: {:#?}", &history);
                     res = coordinator.chat(vec![ChatMessage::user(msg)]).await?;
                 } else {
                     let prompt = "System: though there're no errors, you have effectively taken no actions (no settings changed). Please try again. If intentional, respond with `give up`. If confused, use `request_clarification` for human intervension";
+                    event!(Level::TRACE, "state: {:#?}", state);
+                    event!(Level::TRACE, "history: {:#?}", &history);
                     res = coordinator
                         .chat(vec![ChatMessage::user(prompt.into())])
                         .await?;
@@ -365,7 +370,7 @@ impl<Schedule> Tool for GetPollingInterval<Schedule>
 where
     Schedule: ScheduleParamterAccessor + Send + Sync,
 {
-    type Params = ();
+    type Params = EmptyObject;
 
     fn name() -> &'static str {
         "get_polling_interval"
@@ -458,7 +463,7 @@ impl<Schedule> Tool for GetBufferSize<Schedule>
 where
     Schedule: ScheduleParamterAccessor + Send + Sync,
 {
-    type Params = ();
+    type Params = EmptyObject;
 
     fn name() -> &'static str {
         "get_buffer_size"
@@ -546,7 +551,7 @@ where
     Criteria: CriteriaMemory + Send + Sync,
     Criteria::Error: Display,
 {
-    type Params = ();
+    type Params = EmptyObject;
 
     fn name() -> &'static str {
         "get_criteria"
@@ -581,7 +586,7 @@ where
     }
 }
 
-impl<Ch> Tool for RequestClarification<Ch>
+impl<Ch> Tool for RequireClarification<Ch>
 where
     Ch: ClarificationReqHandler + Send + Sync + 'static,
     Ch::Error: Send + Sync + 'static,
@@ -597,6 +602,7 @@ where
     }
 
     async fn call(&mut self, parameters: Self::Params) -> SystemResult<String> {
+        event!(Level::TRACE, "RequireClarification tool called");
         if let Some(clarification) = self
             .handler
             .on_request(parameters.question.as_str())
@@ -604,8 +610,10 @@ where
             .map_err(anyhow::Error::from)
             .map_err(ToolHandlerError::ClarificationRequest)?
         {
+            event!(Level::TRACE, "got clarification: {clarification}");
             Ok(clarification.into())
         } else {
+            event!(Level::TRACE, "got clarification: rejected");
             Ok("the user actively rejected your request".into())
         }
     }

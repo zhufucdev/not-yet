@@ -72,7 +72,7 @@ where
     type Error = DecisionMemoryError;
 
     async fn push(&mut self, decision: Decision<Self::Material>) -> Result<(), Self::Error> {
-        let material_binary = rmp_serde::to_vec(&decision.material)?;
+        let material_binary = serde_json::to_vec(&decision.material)?;
         let shasum = Sha256::digest(&material_binary)
             .map(|b| format!("{:x}", b))
             .join("");
@@ -122,7 +122,7 @@ where
                 let fp = self.material_dir.join(&shasum);
                 let material: Result<Self::Material, Self::Error> = async {
                     let bin = tokio::fs::read(fp).await.inspect_err(|err| event!(Level::ERROR, "fs read: {err}"))?;
-                    Ok(rmp_serde::from_slice(&bin).inspect_err(|err| event!(Level::ERROR, "deserialization: {err}"))?)
+                    Ok(serde_json::from_slice(&bin).inspect_err(|err| event!(Level::ERROR, "deserialization: {err}"))?)
                 }
                 .instrument(info_span!("sqlite_decision_mem", file = ?shasum))
                 .await;
@@ -155,9 +155,7 @@ pub enum DecisionMemoryError {
     #[error("db: {0}")]
     Db(#[from] sea_orm::DbErr),
     #[error("serialization: {0}")]
-    Serialization(#[from] rmp_serde::encode::Error),
-    #[error("deserialization: {0}")]
-    Deserialization(#[from] rmp_serde::decode::Error),
+    Serialization(#[from] serde_json::Error),
     #[error("file IO: {0}")]
     FileIo(#[from] std::io::Error),
 }

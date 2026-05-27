@@ -54,11 +54,12 @@ pub fn chat_message_from_shared(
     content.into_iter().for_each(|m| match m {
         SharedImageOrText::Image(im) => {
             let mut buf = Cursor::new(Vec::new());
-            im.write_to(&mut buf, image::ImageFormat::Png);
+            im.write_to(&mut buf, image::ImageFormat::Png)
+                .expect("failed to encode PNG");
             images.push(Image::from_base64(BASE64_STANDARD.encode(buf.get_ref())));
             texts.push_str(format!(" <image_{}/> ", images.len()).as_str());
         }
-        SharedImageOrText::Text(text) => texts.push_str(text.as_str()),
+        SharedImageOrText::Text(text) => texts.push_str(format!("{text}\n").as_str()),
     });
-    ChatMessage::new(role, texts).with_images(images)
+    ChatMessage::new(role, texts.trim_end().to_string()).with_images(images)
 }

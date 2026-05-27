@@ -1,6 +1,7 @@
 use std::{fmt::Display, sync::Arc};
 
-use tokio::sync::mpsc;
+use tokio::{select, sync::mpsc};
+use tracing::{Level, event};
 
 pub mod llm;
 
@@ -33,7 +34,8 @@ pub enum ApproveOrDeny {
 }
 
 pub struct OptimizationCallback<Error> {
-    rx: mpsc::Receiver<(OptimizerAction, mpsc::Sender<ApproveOrDeny>)>,
+    action_rx: mpsc::Receiver<(OptimizerAction, mpsc::Sender<ApproveOrDeny>)>,
+    task_completion: mpsc::Receiver<()>,
     task_handle: Option<tokio::task::JoinHandle<Result<(), Error>>>,
 }
 
@@ -60,17 +62,34 @@ pub trait ClarificationReqHandler {
     async fn on_request(&self, prompt: &str) -> Result<Option<String>, Self::Error>;
 }
 
-impl<Error> OptimizationCallback<Error> {
+impl<Error> OptimizationCallback<Error>
+where
+    Error: Display,
+{
     pub fn new<F, Fut>(task: F) -> Self
     where
-        F: FnOnce(mpsc::Sender<(OptimizerAction, mpsc::Sender<ApproveOrDeny>)>) -> Fut,
+        F: FnOnce(mpsc::Sender<(OptimizerAction, mpsc::Sender<ApproveOrDeny>)>) -> Fut
+            + Send
+            + 'static,
         Fut: Future<Output = Result<(), Error>> + Send + 'static,
         Error: Send + 'static,
     {
         let (action_tx, action_rx) = mpsc::channel(1);
+        let (tc_tx, tc_rx) = mpsc::channel(1);
         Self {
-            rx: action_rx,
-            task_handle: Some(tokio::spawn(task(action_tx))),
+            action_rx,
+            task_completion: tc_rx,
+            task_handle: Some(tokio::spawn(async move {
+                let r = match task(action_tx).await {
+                    Ok(_) => Ok(()),
+                    Err(err) => {
+                        event!(Level::ERROR, "optimization task failed: {err}");
+                        Err(err)
+                    }
+                };
+                tc_tx.send(()).await.unwrap();
+                r
+            })),
         }
     }
 
@@ -80,18 +99,29 @@ impl<Error> OptimizationCallback<Error> {
         if self.task_handle.is_none() {
             return Ok(None);
         }
-        let Some(res) = self.rx.recv().await else {
-            let task_handle = self.task_handle.take().unwrap();
-            if task_handle.is_finished() {
+        select! {
+            _ = self.task_completion.recv() => {
+                let task_handle = self.task_handle.take().unwrap();
                 if let Err(err) = task_handle.await.unwrap() {
                     return Err(err);
                 }
-            } else {
-                panic!("receiver dropped without dropping task handle");
+                return Ok(None);
             }
-            return Ok(None);
-        };
-        Ok(Some(res))
+            option = self.action_rx.recv() => {
+                if let Some(res) = option {
+                    return Ok(Some(res));
+                }
+                let task_handle = self.task_handle.take().unwrap();
+                if task_handle.is_finished() {
+                    if let Err(err) = task_handle.await.unwrap() {
+                        return Err(err);
+                    }
+                } else {
+                    panic!("receiver dropped without dropping task handle");
+                }
+                return Ok(None);
+            }
+        }
     }
 }
 

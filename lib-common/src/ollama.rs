@@ -1,20 +1,23 @@
 use std::{
-    borrow::Cow, cell::RefCell, ops::Deref, sync::{Arc, Mutex, RwLock}
+    borrow::Cow,
+    cell::RefCell,
+    ops::Deref,
+    sync::{Arc, Mutex, RwLock},
 };
 
 use ollama_rs::history::ChatHistory;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct OllamaSharedChatHistory<Inner> {
-    inner: RefCell<Inner>,
-    write_lock: Mutex<()>
+    inner: Arc<RefCell<Inner>>,
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl<Inner> OllamaSharedChatHistory<Inner> {
     pub fn new(inner: Inner) -> Self {
         Self {
-            inner: RefCell::new(inner),
-            write_lock: Mutex::new(())
+            inner: Arc::new(RefCell::new(inner)),
+            write_lock: Arc::new(Mutex::new(())),
         }
     }
 }
@@ -32,7 +35,9 @@ where
     Inner: ChatHistory,
 {
     fn push(&mut self, message: ollama_rs::generation::chat::ChatMessage) {
+        let guard = self.write_lock.lock().unwrap();
         self.inner.borrow_mut().push(message);
+        drop(guard);
     }
 
     fn messages(&self) -> Cow<'_, [ollama_rs::generation::chat::ChatMessage]> {
@@ -40,4 +45,4 @@ where
     }
 }
 
-
+unsafe impl<Inner> Send for OllamaSharedChatHistory<Inner> where Inner: Send {}

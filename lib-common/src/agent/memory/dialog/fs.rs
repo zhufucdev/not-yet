@@ -33,7 +33,7 @@ where
         {
             fs::create_dir_all(parent).await?;
         }
-        let binary = rmp_serde::to_vec(dialog)?;
+        let binary = serde_json::to_vec(dialog)?;
         fs::write(&self.file_path, binary).await?;
         Ok(())
     }
@@ -42,7 +42,7 @@ where
         if !self.file_path.exists() {
             return Ok(None);
         }
-        Ok(rmp_serde::from_slice(
+        Ok(serde_json::from_slice(
             fs::read(&self.file_path).await?.as_slice(),
         )?)
     }
@@ -53,7 +53,5 @@ pub enum Error {
     #[error("IO: {0}")]
     IO(#[from] std::io::Error),
     #[error("serialization: {0}")]
-    Serialization(#[from] rmp_serde::encode::Error),
-    #[error("deserialization: {0}")]
-    Deserialization(#[from] rmp_serde::decode::Error),
+    Serialization(#[from] serde_json::Error),
 }
