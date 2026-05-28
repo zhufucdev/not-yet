@@ -99,7 +99,7 @@ impl<K: KeyContract> Scheduler<K> {
         &self,
         trigger: ScheduleTrigger,
         key: K,
-    ) -> Result<Arc<Schedule<K>>, cron::error::Error> {
+    ) -> Result<Schedule<K>, cron::error::Error> {
         let span = info_span!("scheduler.add_schedule");
         async {
             let id = self
@@ -119,39 +119,40 @@ impl<K: KeyContract> Scheduler<K> {
                 s.id,
                 s.trigger
             );
-            self.add_to_task_queue(s.clone()).await;
-            Ok(s)
+            if let Some(t) = Task::for_next_schedule_run(s.clone()) {
+                self.add_to_task_queue(t).await;
+            }
+            Ok(s.as_ref().clone())
         }
         .instrument(span)
         .await
     }
 
-    async fn add_to_task_queue(&self, schedule: Arc<Schedule<K>>) {
+    async fn add_to_task_queue(&self, task: Task<K>) {
+        let schedule = task.schedule.clone();
         async {
-            if let Some(t) = Task::for_next_schedule_run(schedule.clone()) {
-                let mut tq = self.task_queue.write().await;
-                let queue_type = match tq.get_mut(schedule.key()) {
-                    Some(bt) => {
-                        bt.push(t);
-                        event!(Level::DEBUG, "pushing task to queue");
-                        QueueType::Exising
-                    }
-                    None => {
-                        let mut bt = BinaryHeap::new();
-                        bt.push(t);
-                        tq.insert(schedule.key().clone(), bt);
-                        event!(Level::DEBUG, "created new task queue");
-                        QueueType::New
-                    }
-                };
-                let send_result = self.schedules_notify.0.send((queue_type, schedule.clone()));
-                if let Err(err) = send_result {
-                    event!(
-                        Level::WARN,
-                        "failed to send reschedule notifiction to task queue: {}",
-                        err.to_string()
-                    );
+            let mut tq = self.task_queue.write().await;
+            let queue_type = match tq.get_mut(schedule.key()) {
+                Some(bt) => {
+                    bt.push(task);
+                    event!(Level::DEBUG, "pushing task to queue");
+                    QueueType::Exising
                 }
+                None => {
+                    let mut bt = BinaryHeap::new();
+                    bt.push(task);
+                    tq.insert(schedule.key().clone(), bt);
+                    event!(Level::DEBUG, "created new task queue");
+                    QueueType::New
+                }
+            };
+            let send_result = self.schedules_notify.0.send((queue_type, schedule.clone()));
+            if let Err(err) = send_result {
+                event!(
+                    Level::WARN,
+                    "failed to send reschedule notifiction to task queue: {}",
+                    err.to_string()
+                );
             }
         }
         .instrument(schedule.trace_span.clone())
@@ -214,7 +215,7 @@ impl<K: KeyContract> Scheduler<K> {
                         _ = tokio::time::sleep_until(due_time.into()) => {
                             span.in_scope(|| event!(Level::DEBUG, "signaled to run"));
                             *expected_next.state.write().await = TaskState::Running;
-                            self.add_to_task_queue(expected_next.schedule.clone()).await;
+                            self.add_to_task_queue(expected_next.clone()).await;
                             let state = expected_next.state.clone();
                             yield Ok(expected_next);
                             *state.write().await = TaskState::Finished;
@@ -310,6 +311,21 @@ impl<K: KeyContract> Scheduler<K> {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
         handle_io_result(async || tokio::fs::write(path, pid_buf).await).await
+    }
+
+    pub async fn run_now(&self, schedule: &Schedule<K>) -> Option<Task<K>> {
+        if let Some(schedule) = self
+            .schedules()
+            .await
+            .iter()
+            .find(|s| s.id() == schedule.id())
+        {
+            let task = Task::for_immediate_run(schedule.clone());
+            self.add_to_task_queue(task.clone()).await;
+            Some(task)
+        } else {
+            None
+        }
     }
 }
 

@@ -45,9 +45,10 @@ pub async fn add_feed_subscription_for(
     }
 
     let active_sub = sub.insert(db).await?;
-    scheduler
+    let schedule = scheduler
         .add_schedule(active_sub.schedule_trigger(), active_sub.id)
         .await
         .unwrap();
+    scheduler.run_now(&schedule).await;
     Ok(())
 }
