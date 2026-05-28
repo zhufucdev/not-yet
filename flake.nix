@@ -3,7 +3,7 @@
 
   # Nixpkgs / NixOS version to use.
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs";
     crane.url = "github:ipetkov/crane";
   };
 
