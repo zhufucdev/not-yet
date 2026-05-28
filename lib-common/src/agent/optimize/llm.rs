@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     fmt::{Debug, Display},
     ops::Deref,
-    sync::Arc,
+    sync::Arc, time::Duration,
 };
 
 use ollama_rs::{
@@ -46,7 +46,7 @@ pub struct LlmOptimizer<Runner, DiaMem, CriMem, ClarHandler, Schedule> {
     schedule: Arc<RwLock<Schedule>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct State {
     checked: HashSet<ToolcallKind>,
     retrival_rejected: HashSet<ToolcallKind>,
@@ -237,7 +237,7 @@ where
                     .await
                     .map_err(Error::Dialog)?;
                 let gave_up = res.message.content.to_lowercase().contains("give up");
-                let state = state.read().await;
+                let state = state.read().await.clone();
                 if state.retrival_rejected.is_empty() && state.actions_count > 0 || gave_up {
                     event!(Level::DEBUG, "optimization finished");
                     event!(Level::TRACE, "history: {:#?}", &history);
