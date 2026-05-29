@@ -77,12 +77,12 @@ impl<K: KeyContract> Eq for Task<K> {}
 
 impl<K: KeyContract> PartialOrd for Task<K> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.due_time.partial_cmp(&other.due_time)
+        Some(self.cmp(other))
     }
 }
 
 impl<K: KeyContract> Ord for Task<K> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.due_time.cmp(&other.due_time)
+        other.due_time.cmp(&self.due_time)
     }
 }

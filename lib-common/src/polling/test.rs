@@ -36,6 +36,10 @@ fn every_minute() -> ScheduleTrigger {
     ScheduleTrigger::Cron("0 * * * * * *".to_string())
 }
 
+fn hourly_interval() -> ScheduleTrigger {
+    ScheduleTrigger::Interval(Duration::from_secs(60 * 60))
+}
+
 fn scheduler() -> Scheduler<TestKey> {
     Scheduler::new()
 }
@@ -407,6 +411,26 @@ async fn start_polling_with_unknown_key_returns_immediately() {
         "expected stream to end immediately for unknown key, got {:?}",
         result
     );
+}
+
+#[tokio::test]
+#[traced_test]
+async fn run_now_yields_before_future_schedule() {
+    let s = scheduler();
+    let schedule = s
+        .add_schedule(hourly_interval(), TestKey(1))
+        .await
+        .expect("valid interval");
+    s.run_now(&schedule).await.expect("schedule exists");
+
+    let mut stream = Box::pin(s.start_polling(None));
+    let task = timeout(Duration::from_millis(100), stream.next())
+        .await
+        .expect("timed out")
+        .expect("stream ended")
+        .expect("task error");
+
+    assert!(task.due_time() <= chrono::Utc::now());
 }
 
 // ---------------------------------------------------------------------------

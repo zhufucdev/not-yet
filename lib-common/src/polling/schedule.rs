@@ -171,7 +171,7 @@ impl<K: KeyContract> Scheduler<K> {
             loop {
                 event!(Level::TRACE, "polling for next task");
                 let mut reschedule_rx = self.schedules_notify.0.subscribe();
-                let Some(expected_next) = (if let Some(key) = key.as_ref() {
+                let Some(current_task) = (if let Some(key) = key.as_ref() {
                     let mut guard = self.task_queue.write().await;
                     guard.get_mut(key).map(|bt| bt.pop()).flatten()
                 } else {
@@ -187,10 +187,10 @@ impl<K: KeyContract> Scheduler<K> {
                     event!(Level::TRACE, "no future tasks expected, end polling now");
                     return;
                 };
-                let span = expected_next.schedule().trace_span.clone();
-                let due_time = expected_next.get_due_instant();
+                let span = current_task.schedule().trace_span.clone();
+                let due_time = current_task.get_due_instant();
                 loop {
-                    span.in_scope(|| event!(Level::DEBUG, "waiting for next run"));
+                    span.in_scope(|| event!(Level::DEBUG, "waiting for next run in {}s", (due_time - Instant::now()).as_secs()));
                     #[cfg(feature = "daemon")]
                     match Self::lock().await {
                         Ok(_) => {}
@@ -203,7 +203,7 @@ impl<K: KeyContract> Scheduler<K> {
                         schedule = reschedule_rx.recv() => {
                             if let Ok((_, schedule)) = schedule
                                 && key.is_none_or(|k| schedule.key() == k)
-                                && schedule.get_next_run_time().is_some_and(|t| t < expected_next.due_time())
+                                && schedule.get_next_run_time().is_some_and(|t| t < current_task.due_time())
                             {
                                 span.in_scope(|| event!(Level::DEBUG, "signaled to cancel"));
                                 yield Err(TaskCancellationError)
@@ -214,10 +214,14 @@ impl<K: KeyContract> Scheduler<K> {
                         }
                         _ = tokio::time::sleep_until(due_time.into()) => {
                             span.in_scope(|| event!(Level::DEBUG, "signaled to run"));
-                            *expected_next.state.write().await = TaskState::Running;
-                            self.add_to_task_queue(expected_next.clone()).await;
-                            let state = expected_next.state.clone();
-                            yield Ok(expected_next);
+                            *current_task.state.write().await = TaskState::Running;
+                            if let Some(next) = Task::for_next_schedule_run(current_task.schedule.clone()) {
+                                self.add_to_task_queue(next).await;
+                            } else {
+                                span.in_scope(|| event!(Level::DEBUG, "ran out of tasks to run"))
+                            }
+                            let state = current_task.state.clone();
+                            yield Ok(current_task);
                             *state.write().await = TaskState::Finished;
                             break;
                         }

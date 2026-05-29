@@ -242,7 +242,10 @@ async fn start_polling_all(
 
             match sub.kind {
                 subscription::Kind::Rss => {
-                    let feed: RssFeed = rss.unwrap().try_into()?;
+                    let Some(rss) = rss else {
+                        return Err(anyhow!("RSS subscription has no associated feed"));
+                    };
+                    let feed: RssFeed = rss.try_into()?;
                     send_update_messages(
                         &bot,
                         &feed,
@@ -256,7 +259,10 @@ async fn start_polling_all(
                     .await?;
                 }
                 subscription::Kind::Atom => {
-                    let feed: AtomFeed = atom.unwrap().try_into()?;
+                    let Some(atom) = atom else {
+                        return Err(anyhow!("Atom subscription has no associated feed"));
+                    };
+                    let feed: AtomFeed = atom.try_into()?;
                     send_update_messages(
                         &bot,
                         &feed,
@@ -271,7 +277,7 @@ async fn start_polling_all(
                 }
             }
 
-            Err(anyhow!("subscription has no associated feed"))
+            Ok(())
         }
         .instrument(info_span!("run_task", subscription_id = sub_id))
     });
