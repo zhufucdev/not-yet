@@ -150,8 +150,9 @@ where
     }
 
     async fn is_empty(&self) -> Result<bool, Self::Error> {
-        let mut query =
-            Entity::find().filter(super::material::Column::Kind.eq(Self::Material::KIND.unwrap()));
+        let mut query = Entity::find()
+            .find_also_related(super::material::Entity)
+            .filter(super::material::Column::Kind.eq(Self::Material::KIND.unwrap()));
         if let Some(agent_id) = self.agent_id {
             query = query.filter(Column::AgentId.eq(agent_id));
         }
