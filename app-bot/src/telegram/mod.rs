@@ -148,6 +148,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
                                 },
                                 Err(err) => {
                                     event!(Level::ERROR, "while polling: {err}");
+                                    event!(Level::DEBUG, "{err:#?}");
                                 },
                             }
                         },

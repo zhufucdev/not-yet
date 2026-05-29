@@ -1,8 +1,8 @@
 use std::{
     borrow::Cow,
-    cell::RefCell,
+    cell::{BorrowError, Ref, RefCell, RefMut},
     ops::Deref,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
 };
 
 use ollama_rs::history::ChatHistory;
@@ -20,13 +20,17 @@ impl<Inner> OllamaSharedChatHistory<Inner> {
             write_lock: Arc::new(Mutex::new(())),
         }
     }
-}
 
-impl<Inner> Deref for OllamaSharedChatHistory<Inner> {
-    type Target = Inner;
+    pub fn borrow<'s>(&'s self) -> Ref<'s, Inner> {
+        self.inner.borrow()
+    }
 
-    fn deref(&self) -> &Self::Target {
-        unsafe { self.inner.try_borrow_unguarded().unwrap() }
+    pub fn borrow_mut<'s>(&'s self) -> RefMut<'s, Inner> {
+        self.inner.borrow_mut()
+    }
+
+    pub unsafe fn borrow_unguraded(&self) -> Result<&Inner, BorrowError> {
+        unsafe { self.inner.try_borrow_unguarded() }
     }
 }
 
@@ -41,7 +45,9 @@ where
     }
 
     fn messages(&self) -> Cow<'_, [ollama_rs::generation::chat::ChatMessage]> {
-        self.deref().messages()
+        unsafe { self.inner.try_borrow_unguarded() }
+            .unwrap()
+            .messages()
     }
 }
 

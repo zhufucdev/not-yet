@@ -23,6 +23,7 @@ pub trait DecisionMemory {
     async fn clear(&mut self) -> Result<(), Self::Error>;
 }
 
+#[derive(Debug, Clone)]
 pub struct Decision<M: LlmComprehendable> {
     pub material: M,
     pub is_truthy: bool,

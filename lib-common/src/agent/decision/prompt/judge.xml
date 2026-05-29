@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<prompt>
+  <p>It is {time}</p>
+  <p>You are tasked with judging whether {condition} for the following post:</p>
+  <expand>{update}</expand>
+  <p>Is it true that {condition}?</p>
+  <p>Note:</p>
+  <expand>{notes}</expand>
+  <p>Avoid explanations, and answer in "Yes" or "No"</p>
+</prompt>

@@ -2,7 +2,8 @@ use std::{
     collections::HashSet,
     fmt::{Debug, Display},
     ops::Deref,
-    sync::Arc, time::Duration,
+    sync::Arc,
+    time::Duration,
 };
 
 use ollama_rs::{
@@ -233,7 +234,10 @@ where
                 dialog_mem
                     .write()
                     .await
-                    .update(history.deref())
+                    // this unsafe is fine because
+                    // 1. History is Send
+                    // 2. Lifecycle is known
+                    .update(unsafe { history.borrow_unguraded().unwrap() })
                     .await
                     .map_err(Error::Dialog)?;
                 let gave_up = res.message.content.to_lowercase().contains("give up");

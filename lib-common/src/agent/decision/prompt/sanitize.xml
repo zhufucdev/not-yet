@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<prompt>
+  <p>Your task is to optimize within the content boundary so that it fits the grammatical structure of the whole and forms a single complete sentence:</p>
+  <p>Is it true that {text}</p>
+  <p>Notes:</p>
+  <p>- Avoid explanations.</p>
+  <p>- Begin your response with “Is it true that”</p>
+</prompt>
