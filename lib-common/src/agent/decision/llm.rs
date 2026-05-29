@@ -8,15 +8,17 @@ use crate::{
             decision::{Decision, DecisionMemory},
             dialog::DialogMemory,
         },
+        optimize::llm::ToolResult,
         template::{self, PromptMacro, PromptMacros},
     },
     ollama::OllamaSharedChatHistory,
     runner::{OllamaRunner, ollama},
     secure,
-    source::{LlmComprehendable, SharedImageOrText},
+    source::{LlmComprehendable, SharedImageOrText, utils::SAFARI_UA},
 };
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
+use html_to_markdown_rs::{ConversionOptions, LinkStyle, OutputFormat};
 use ollama_rs::{
     error::OllamaError,
     generation::{
@@ -27,6 +29,7 @@ use ollama_rs::{
     history::ChatHistory,
 };
 use rand::distr::uniform::SampleRange;
+use reqwest::{Url, header::HeaderName};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use smol_str::ToSmolStr;
@@ -45,6 +48,8 @@ pub struct LlmConditionMatcher<Runner, DecisionMemory, DialogMemory, Criteria> {
 struct GetPreviousDecisions<M> {
     mem: Arc<RwLock<M>>,
 }
+
+struct FetchUrl(reqwest::Client);
 
 impl<Runner, DecisionMemory, DialogMemory, Criteria>
     LlmConditionMatcher<Runner, DecisionMemory, DialogMemory, Criteria>
@@ -164,7 +169,17 @@ where
                 .think(ThinkType::High)
                 .add_tool(GetPreviousDecisions {
                     mem: self.decmem.clone(),
-                });
+                })
+                .add_tool(FetchUrl(
+                    reqwest::Client::builder()
+                        .default_headers(
+                            [(reqwest::header::USER_AGENT, SAFARI_UA.parse().unwrap())]
+                                .into_iter()
+                                .collect(),
+                        )
+                        .build()
+                        .unwrap(),
+                ));
 
             // This can get expensive, so when model does not require
             // decision memory, we don't query
@@ -308,6 +323,16 @@ struct GetPreviousDecisionsParams {
     filter: Option<DecisionFilter>,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[allow(dead_code)]
+struct FetchUrlParams {
+    url: String,
+    /// Get the raw text response regardless of its content type
+    no_sanitize: Option<bool>,
+    /// Cap the number of characters returned, defaults to 5k
+    limit: Option<usize>,
+}
+
 #[derive(Debug, Clone, Copy, JsonSchema, Deserialize)]
 enum DecisionFilter {
     /// You said yes.
@@ -371,6 +396,72 @@ where
             }
         }
         Ok("[]".into())
+    }
+}
+
+impl Tool for FetchUrl {
+    type Params = FetchUrlParams;
+
+    fn name() -> &'static str {
+        "fetch_url"
+    }
+
+    fn description() -> &'static str {
+        "Fetch content from a URL as Markdown"
+    }
+
+    async fn call(&mut self, parameters: Self::Params) -> SystemResult<String> {
+        let url = match Url::parse(&parameters.url) {
+            Ok(r) => r,
+            Err(err) => {
+                return SystemResult::Ok(ToolResult::Failure(err.to_string()).into());
+            }
+        };
+        match self
+            .0
+            .get(url)
+            .send()
+            .await
+            .map(|res| res.error_for_status())
+            .flatten()
+        {
+            Ok(res) => {
+                let content_type = res.headers()[reqwest::header::CONTENT_TYPE]
+                    .to_str()
+                    .unwrap();
+                if !content_type.starts_with("text/") {
+                    return Ok(format!("expect a text content type, got {content_type:?}").into());
+                }
+                let Some(text_type) = content_type
+                    .split('/')
+                    .skip(1)
+                    .next()
+                    .and_then(|rem| rem.split(';').next())
+                    .map(|t| t.trim())
+                else {
+                    return Ok(format!("unknown content type: {content_type}").into());
+                };
+                match (text_type, parameters.no_sanitize) {
+                    ("plain", _) => Ok(res.text_with_charset("utf-8").await?.into()),
+                    ("html" | "xml", _) => {
+                        let md = html_to_markdown_rs::convert(
+                            res.text_with_charset("utf-8").await?.as_str(),
+                            Some(
+                                ConversionOptions::builder()
+                                    .capture_svg(false)
+                                    .output_format(OutputFormat::Markdown)
+                                    .link_style(LinkStyle::Reference)
+                                    .build(),
+                            ),
+                        )?;
+                        Ok(md.content.unwrap()[0..parameters.limit.unwrap_or(5_000)].into())
+                    }
+                    (_, None | Some(false)) => Ok(format!("unsupported: {content_type}").into()),
+                    (_, Some(true)) => Ok(res.text_with_charset("utf-8").await?.into()),
+                }
+            }
+            Err(err) => Ok(format!("HTTP reqest failed: {err}").into()),
+        }
     }
 }
 
@@ -469,5 +560,34 @@ mod test {
             .await
             .unwrap();
         assert!(ch4_applicable);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn fetch_url_tool() {
+        let matcher = LlmConditionMatcher::new(
+            Default::default(),
+            "there are at least 5 comments",
+            DebugDecisionMemory::new(),
+            DebugDialogMemory::new(),
+            DebugCriteriaMemory::new(),
+        );
+        let update = json!({
+            "title": "The $500K AI Film That ‘Premiered at Cannes’ Didn’t Actually Premiere at Cannes",
+            "pubDate": "Thu, 28 May 2026 17:43:36 +0000",
+            "link": "https://firethering.com/hell-grind-ai-film-cannes-premiere-higgsfield/",
+            "guid": "https://news.ycombinator.com/item?id=48320985",
+            "comments": "https://news.ycombinator.com/item?id=48320985"
+        }).to_string();
+        let applicable = matcher
+            .get_truth_value(&DefaultUpdate::new(
+                "The K AI Film That ‘Premiered at Cannes’ Didn’t Actually Premiere at Cannes",
+                [update.into()],
+                Some("RSS item".into()),
+            ))
+            .await
+            .unwrap();
+        dbg!(matcher.diamem.read().await.get().await);
+        assert!(applicable);
     }
 }

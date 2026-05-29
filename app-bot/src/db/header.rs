@@ -1,10 +1,11 @@
 use std::str::FromStr;
 
+use lib_common::source;
 use reqwest::header::{HeaderName, HeaderValue};
 
 use crate::db::error::ParseHeaderError;
 
-pub const SAFARI_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15";
+pub const SAFARI_UA: &str = source::utils::SAFARI_UA;
 
 pub fn parse_headers(
     str: impl AsRef<str>,

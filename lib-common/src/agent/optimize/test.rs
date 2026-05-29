@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ntest::timeout;
+use ollama_rs::generation::chat::ChatMessage;
 use tokio::sync::{RwLock, mpsc};
 use tracing::event;
 use tracing_test::traced_test;
@@ -18,6 +19,7 @@ use crate::{
     },
     error::NaE,
     polling::schedule,
+    runner::OllamaRunner,
 };
 
 struct ChannelClarreqHandler {
@@ -77,48 +79,15 @@ impl ScheduleParamterAccessor for DummySchedule {
 
 #[tokio::test]
 #[traced_test]
-#[timeout(1000)]
-async fn optimization_callback() {
-    let mut callback: OptimizationCallback<()> = OptimizationCallback::new(async |action| {
-        let tool_handler = gemma4::ToolHandler::<NaE>::new(|_| {
-            let action = action.clone();
-            async move {
-                let (tx, mut rx) = mpsc::channel(1);
-                action
-                    .clone()
-                    .send((OptimizerAction::ContextPrefill(vec![]), tx))
-                    .await
-                    .unwrap();
-                assert_eq!(rx.recv().await.unwrap(), ApproveOrDeny::Approve);
-                Ok(gemma4::ToolResult::Success("success").into())
-            }
-        });
-        let tool_call = toolcall::ToolCall {
-            tool: "".to_string(),
-            args: serde_json::Map::default(),
-        };
-        let res: ToolResponse = toolcall::handle_tool_call(
-            tool_call,
-            &[("".to_string(), tool_handler)].into_iter().collect(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(res.name, "");
-        Ok(())
-    });
-    let (opt, app) = callback.accept().await.unwrap().unwrap();
-    assert!(matches!(opt, OptimizerAction::ContextPrefill(_)));
-    app.send(ApproveOrDeny::Approve).await.unwrap();
-}
-
-#[tokio::test]
-#[traced_test]
 async fn optimize_criteria() {
     let mut dialog_mem = DebugDialogMemory::new();
     dialog_mem
-        .update(&rmp_serde::from_slice::<gemma4::Dialog>(include_bytes!("dialog-hn.rmp")).unwrap())
+        .update(
+            &rmp_serde::from_slice::<Vec<ChatMessage>>(include_bytes!("dialog-hn.rmp")).unwrap(),
+        )
         .await
         .unwrap();
+    let dialog = dialog_mem.get().await.unwrap().unwrap();
     let criteria_mem = DebugCriteriaMemory::new();
     let clarreq = ChannelClarreqHandler::new();
     let mut schedule = DummySchedule {
@@ -127,20 +96,17 @@ async fn optimize_criteria() {
     };
 
     let optimizer = Arc::new(LlmOptimizer::new(
-        OwnedModel::new(Gemma4VisionRunner::default().await.unwrap()),
+        OllamaRunner::default(),
         dialog_mem,
         criteria_mem,
         clarreq,
         schedule,
     ));
 
-    let mut optimization = optimizer
-        .optimize_inplace(
-            "this is more related to programming jobs rather than the actvitiy itself".into(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+    let mut optimization = optimizer.optimize(
+        "this is more related to programming jobs rather than the actvitiy itself".into(),
+        dialog,
+    );
     let (action, approve) = optimization
         .accept()
         .await

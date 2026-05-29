@@ -46,6 +46,7 @@ ollama-rs.workspace = true
 base64 = "0.22.1"
 strum = { version = "0.28", features = ["derive"] }
 sysinfo = { version = "0.39", optional = true }
+html-to-markdown-rs = "3.5.5"
 
 [dev-dependencies]
 ntest = "0.9.5"

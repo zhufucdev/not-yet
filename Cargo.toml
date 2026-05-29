@@ -34,7 +34,9 @@ trait-variant = "0.1.2"
 toml = "1.1.0"
 dirs = "6.0.0"
 async-stream = "0.3.6"
-ollama-rs = { git = "https://github.com/zhufucdev/ollama-rs.git", branch = "master" }
+ollama-rs = { git = "https://github.com/zhufucdev/ollama-rs.git", branch = "master", features = [
+	"macros",
+] }
 
 [dependencies]
 lib-common = { path = "lib-common" }

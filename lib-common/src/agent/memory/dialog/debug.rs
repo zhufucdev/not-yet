@@ -1,5 +1,6 @@
 use crate::{agent::memory::dialog::DialogMemory, error::NaE};
 
+#[derive(Debug, Clone)]
 pub struct DebugDialogMemory<D> {
     mem: Option<D>,
 }

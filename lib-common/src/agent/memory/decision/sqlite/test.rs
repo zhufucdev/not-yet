@@ -2,7 +2,6 @@ use std::env::temp_dir;
 
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
-use llama_runner::ImageOrText;
 use sea_orm::{ConnectionTrait, Database, Schema};
 use serde::{Deserialize, Serialize};
 
@@ -10,8 +9,7 @@ use crate::{
     agent::memory::decision::{
         self, CreateDecisionMemoryError, Decision, DecisionMemory, SqliteDecisionMemory, material,
     },
-    llm::SharedImageOrText,
-    source::LlmComprehendable,
+    source::{LlmComprehendable, SharedImageOrText},
 };
 
 // ---------------------------------------------------------------------------
