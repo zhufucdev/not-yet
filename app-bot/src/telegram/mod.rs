@@ -517,17 +517,20 @@ async fn chose_subscription_type(
     let Some(kind_hex) = &query.data else {
         bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
             .await?;
+        bot.answer_callback_query(query.id).await?;
         return Ok(());
     };
     const INVALID_DATA_RESPONSE: &str = "I don't believe the data attached to the button you just clicked is valid. How did this happen?";
     let Ok(kind_id) = i32::from_str_radix(kind_hex, 16) else {
         bot.send_message(query.chat_id().unwrap(), INVALID_DATA_RESPONSE)
             .await?;
+        bot.answer_callback_query(query.id).await?;
         return Ok(());
     };
     let Ok(kind) = subscription::Kind::try_from_value(&kind_id) else {
         bot.send_message(query.chat_id().unwrap(), INVALID_DATA_RESPONSE)
             .await?;
+        bot.answer_callback_query(query.id).await?;
         return Ok(());
     };
     match kind {
@@ -556,6 +559,7 @@ async fn chose_subscription_type(
             .await?;
         }
     }
+    bot.answer_callback_query(query.id.clone()).await?;
     repmark::remove(&query, &bot).await;
     Ok(())
 }
@@ -636,7 +640,7 @@ async fn choose_rss_mock_browser(
                     url,
                     kind,
                 })
-                .await?
+                .await?;
         }
         "n" => {
             dialog
@@ -658,6 +662,7 @@ async fn choose_rss_mock_browser(
                 })
                 .await?;
             bot.send_message(chat_id, CUSTOM_HEADERS_PROMPT).await?;
+            bot.answer_callback_query(query.id).await?;
             return Ok(());
         }
         "s" => {
@@ -674,6 +679,7 @@ async fn choose_rss_mock_browser(
             return Ok(());
         }
     }
+    bot.answer_callback_query(query.id.clone()).await?;
     repmark::remove(&query, &bot).await;
     bot.send_message(
         chat_id,
@@ -713,6 +719,7 @@ async fn choose_rss_custom_headers(
             bot.send_message(chat_id, UNKNOWN_ACTION_RESPONSE).await?;
         }
     }
+    bot.answer_callback_query(query.id.clone()).await?;
     repmark::remove(&query, &bot).await;
     Ok(())
 }
@@ -893,6 +900,7 @@ async fn receive_feedback_query(
         let Some(data) = query.data.as_ref() else {
             bot.send_message(query.chat_id().unwrap(), EMPTY_MESSAGE_RESPONSE)
                 .await?;
+            bot.answer_callback_query(query.id.clone()).await?;
             return Ok(());
         };
         let Some((idx, task)) = (async || {
@@ -916,6 +924,7 @@ async fn receive_feedback_query(
                     .map(|t| t.prompt.id)
                     .collect::<Vec<_>>()
             );
+            bot.answer_callback_query(query.id.clone()).await?;
             return Ok(());
         };
 
@@ -932,6 +941,7 @@ async fn receive_feedback_query(
                 _ => {
                     bot.send_message(query.chat_id().unwrap(), UNKNOWN_ACTION_RESPONSE)
                         .await?;
+                    bot.answer_callback_query(query.id.clone()).await?;
                     return Ok(());
                 }
             },
@@ -945,6 +955,7 @@ async fn receive_feedback_query(
             }
         }
         task.reset_user_prompt(&bot).await;
+        bot.answer_callback_query(query.id.clone()).await?;
         tasks.write().await.remove(idx);
         Ok(())
     }
