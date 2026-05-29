@@ -1,4 +1,4 @@
-use std::{fmt::Display, sync::Arc};
+use std::fmt::Display;
 
 use tokio::{select, sync::mpsc};
 use tracing::{Level, event};

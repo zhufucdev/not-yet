@@ -1,9 +1,7 @@
 use std::{
     collections::HashSet,
     fmt::{Debug, Display},
-    ops::Deref,
     sync::Arc,
-    time::Duration,
 };
 
 use ollama_rs::{
@@ -35,6 +33,7 @@ use crate::{
         },
         template,
     },
+    error::NaE,
     ollama::OllamaSharedChatHistory,
     runner::{OllamaRunner, ollama},
 };
@@ -210,11 +209,12 @@ where
                         )]
                         .into_iter()
                         .collect();
-                        template::expand_prompt(
+                        template::expand_prompt::<NaE>(
                             include_str!("./prompt.xml"),
                             &literals,
                             &Default::default(),
                         )
+                        .await
                         .expect("initial prompt failed")
                     } else {
                         [prompt

@@ -21,6 +21,7 @@ pub trait DecisionMemory {
         &'s self,
     ) -> impl Stream<Item = Result<impl AsRef<Decision<Self::Material>>, Self::Error>>;
     async fn clear(&mut self) -> Result<(), Self::Error>;
+    async fn is_empty(&self) -> Result<bool, Self::Error>;
 }
 
 #[derive(Debug, Clone)]

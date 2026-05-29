@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     cell::{BorrowError, Ref, RefCell, RefMut},
-    ops::Deref,
     sync::{Arc, Mutex},
 };
 

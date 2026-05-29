@@ -148,6 +148,15 @@ where
             .await?;
         Ok(())
     }
+
+    async fn is_empty(&self) -> Result<bool, Self::Error> {
+        let mut query =
+            Entity::find().filter(super::material::Column::Kind.eq(Self::Material::KIND.unwrap()));
+        if let Some(agent_id) = self.agent_id {
+            query = query.filter(Column::AgentId.eq(agent_id));
+        }
+        Ok(query.one(&self.db).await?.is_some())
+    }
 }
 
 #[derive(Debug, Error)]

@@ -5,8 +5,7 @@ use futures::Stream;
 
 use super::TimeOrderedDecisionMemory;
 use crate::{
-    agent::memory::decision::{Decision, DecisionMemory},
-    source::LlmComprehendable,
+    agent::memory::decision::{Decision, DecisionMemory}, error::NaE, source::LlmComprehendable
 };
 
 pub struct DebugDecisionMemory<U: LlmComprehendable> {
@@ -26,7 +25,7 @@ where
     U: LlmComprehendable + Send + Sync,
 {
     type Material = U;
-    type Error = ();
+    type Error = NaE;
 
     async fn push(&mut self, decision: Decision<Self::Material>) -> Result<(), Self::Error> {
         self.decisions
@@ -47,5 +46,9 @@ where
     async fn clear(&mut self) -> Result<(), Self::Error> {
         self.decisions.clear();
         Ok(())
+    }
+
+    async fn is_empty(&self) -> Result<bool, Self::Error> {
+        Ok(self.decisions.is_empty())
     }
 }

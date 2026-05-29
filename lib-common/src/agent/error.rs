@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum TemplateExpansionError {
+pub enum TemplateExpansionError<Macro> {
     #[error("xml parsing: {0}")]
     XmlParsing(#[from] quick_xml::Error),
     #[error("invalid tag: {0}")]
@@ -10,6 +10,8 @@ pub enum TemplateExpansionError {
     InvalidHirarchy,
     #[error("invalid macro: {0}")]
     InvalidMacro(String),
+    #[error("macro internal error: {0}")]
+    MacroInternal(Macro),
 }
 
 #[derive(Debug, Error)]

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use futures::future::BoxFuture;
 use quick_xml::events::Event;
 
 use crate::{agent::error::TemplateExpansionError, source::SharedImageOrText};
@@ -11,14 +12,28 @@ enum TagKind {
     Prompt,
 }
 
-pub type PromptMacros<'a> = HashMap<String, Box<dyn Fn() -> Vec<SharedImageOrText> + 'a>>;
+pub type PromptMacros<'a, Err> = HashMap<String, PromptMacro<'a, Err>>;
 
-pub fn expand_prompt(
+pub struct PromptMacro<'a, Err>(
+    Box<dyn Fn() -> BoxFuture<'a, Result<Vec<SharedImageOrText>, Err>> + Send + Sync + 'a>,
+);
+
+impl<'a, Err> PromptMacro<'a, Err> {
+    pub fn new<F, Fut>(f: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'a,
+        Fut: Future<Output = Result<Vec<SharedImageOrText>, Err>> + Send + 'a,
+    {
+        Self(Box::new(move || Box::pin(f())))
+    }
+}
+
+pub async fn expand_prompt<'a, MacroErr>(
     template: impl AsRef<str>,
     literals: &HashMap<String, String>,
-    macros: &PromptMacros,
-) -> Result<Vec<SharedImageOrText>, TemplateExpansionError> {
-    let macro_expand = move |name: &str| {
+    macros: &PromptMacros<'a, MacroErr>,
+) -> Result<Vec<SharedImageOrText>, TemplateExpansionError<MacroErr>> {
+    let macro_expand = async move |name: &str| {
         if !name.starts_with("{") || !name.ends_with("}") {
             return Err(TemplateExpansionError::InvalidMacro(name.to_string()));
         }
@@ -26,7 +41,9 @@ pub fn expand_prompt(
         let Some(expander) = macros.get(name) else {
             return Err(TemplateExpansionError::InvalidMacro(name.to_string()));
         };
-        Ok(expander())
+        Ok(expander.0()
+            .await
+            .map_err(TemplateExpansionError::MacroInternal)?)
     };
     let literal_replace = move |content: &str| {
         let mut result = content.to_string();
@@ -73,7 +90,7 @@ pub fn expand_prompt(
             }
             Event::Text(byte_text) if tag_hierarchy.last() == Some(&TagKind::Expand) => {
                 let text = encoding.decode(&byte_text).0;
-                let expansions = macro_expand(text.as_ref())?;
+                let expansions = macro_expand(text.as_ref()).await?;
                 for expansion in expansions {
                     messages.push(expansion);
                 }

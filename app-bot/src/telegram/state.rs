@@ -4,7 +4,7 @@ use lib_common::agent::optimize::ApproveOrDeny;
 use smol_str::SmolStr;
 use teloxide::{
     Bot,
-    types::{ChatId, Message, MessageId},
+    types::Message,
 };
 use tokio::sync::{RwLock, mpsc};
 
