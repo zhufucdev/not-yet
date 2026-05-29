@@ -235,7 +235,7 @@ where
                                     params.filter.map(|f| f.matches(decision)).unwrap_or(true)
                                 })
                                 .skip(params.offset.unwrap_or(0))
-                                .take(params.limit.unwrap_or(usize::MAX))
+                                .take(params.limit.unwrap_or(3usize))
                             {
                                 let decision = decision.as_ref();
                                 history.borrow_mut().splice(
@@ -317,7 +317,7 @@ where
 struct GetPreviousDecisionsParams {
     /// Skip the first n items, defaults to 0.
     offset: Option<usize>,
-    /// Cap the number of items returned.
+    /// Cap the number of items returned, defaults to 3.
     limit: Option<usize>,
     /// Return matching items only.
     filter: Option<DecisionFilter>,
