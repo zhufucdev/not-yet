@@ -112,7 +112,7 @@ where
                     .await
                     .map_err(GetTruthValueError::DecisionMemory)?
                 {
-                    notes.push("".into());
+                    notes.push("You have seen this series before.".into());
                 }
                 Ok(notes)
             }),
