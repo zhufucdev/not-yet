@@ -323,7 +323,11 @@ impl<K: KeyContract> Scheduler<K> {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
         handle_io_result(&path_display, async || {
-            tokio::fs::write(&path, pid_buf).await
+            use std::{fs::Permissions, os::unix::fs::PermissionsExt};
+
+            tokio::fs::write(&path, pid_buf).await?;
+            tokio::fs::set_permissions(&path, Permissions::from_mode(0o777)).await?;
+            Ok(())
         })
         .await
     }
