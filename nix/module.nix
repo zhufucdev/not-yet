@@ -85,9 +85,11 @@ in
               "--config ${cfg.dataPath}"
             ])
             + lib.optionalString (cfg.extraOpts != null) cfg.extraOpts;
-          Environment = lib.optional (cfg.extraEnv != null) cfg.extraEnv;
+          Environment =
+            [ "NOT_YET_LOCK_FILE=/run/not-yet/not-yet.lock" ]
+            ++ lib.optional (cfg.extraEnv != null) cfg.extraEnv;
           DynamicUser = true;
-          PrivateTmp = false;
+          RuntimeDirectory = [ "not-yet" ];
           WorkingDirectory = cfg.dataPath;
           StateDirectory = [ (lib.removePrefix "/var/lib/" cfg.dataPath) ];
           ReadWritePaths = [ cfg.dataPath ];

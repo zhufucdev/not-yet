@@ -41,10 +41,10 @@ pub struct Scheduler<K: KeyContract> {
 }
 
 #[cfg(all(feature = "daemon", target_os = "linux"))]
-const LOCKFILE_PATH: &str = "/tmp/not-yet.lock";
+const DEFAULT_LOCKFILE_PATH: &str = "/tmp/not-yet.lock";
 
 #[cfg(all(feature = "daemon", target_os = "macos"))]
-const LOCKFILE_PATH: &str = "/tmp/not-yet.pid";
+const DEFAULT_LOCKFILE_PATH: &str = "/tmp/not-yet.pid";
 
 #[derive(Debug, Clone)]
 pub enum QueueType {
@@ -244,9 +244,12 @@ impl<K: KeyContract> Scheduler<K> {
 
     #[cfg(feature = "daemon")]
     pub async fn lock() -> Result<(), std::io::Error> {
-        use std::{io::ErrorKind, path::Path, process};
+        use std::{io::ErrorKind, path::PathBuf, process};
 
-        async fn handle_io_result<R, Fut>(f: impl Fn() -> Fut) -> Result<R, std::io::Error>
+        async fn handle_io_result<R, Fut>(
+            path: &str,
+            f: impl Fn() -> Fut,
+        ) -> Result<R, std::io::Error>
         where
             Fut: Future<Output = Result<R, std::io::Error>>,
         {
@@ -261,7 +264,7 @@ impl<K: KeyContract> Scheduler<K> {
                         | ErrorKind::PermissionDenied => {
                             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
-                            event!(Level::DEBUG, "unable to lock {}: {err}", LOCKFILE_PATH);
+                            event!(Level::DEBUG, "unable to lock {path}: {err}");
                         }
                         _ => return Err(err),
                     },
@@ -269,20 +272,24 @@ impl<K: KeyContract> Scheduler<K> {
             }
         }
 
-        event!(Level::DEBUG, "locking {}", LOCKFILE_PATH);
-        let path = Path::new(LOCKFILE_PATH);
+        let path = std::env::var_os("NOT_YET_LOCK_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_LOCKFILE_PATH));
+        let path_display = path.display().to_string();
+        event!(Level::DEBUG, "locking {path_display}");
         let pid = process::id();
         let pid_str = pid.to_string();
         let pid_buf = pid_str.as_bytes();
         while path.exists() {
             use tokio::io::AsyncReadExt;
 
-            if handle_io_result(async || {
+            if handle_io_result(&path_display, async || {
                 use sysinfo::{Pid, System};
                 use tokio::io::AsyncSeekExt;
 
                 let mut lockfile =
-                    handle_io_result(async || tokio::fs::File::open(path).await).await?;
+                    handle_io_result(&path_display, async || tokio::fs::File::open(&path).await)
+                        .await?;
                 let told_len = lockfile.seek(std::io::SeekFrom::End(0)).await?;
                 if told_len > 10 {
                     return Ok(true);
@@ -312,10 +319,13 @@ impl<K: KeyContract> Scheduler<K> {
             }
 
             // spin lock
-            event!(Level::DEBUG, "unable to lock {}...", LOCKFILE_PATH);
+            event!(Level::DEBUG, "unable to lock {}...", path.display());
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
-        handle_io_result(async || tokio::fs::write(path, pid_buf).await).await
+        handle_io_result(&path_display, async || {
+            tokio::fs::write(&path, pid_buf).await
+        })
+        .await
     }
 
     pub async fn run_now(&self, schedule: &Schedule<K>) -> Option<Task<K>> {
