@@ -17,6 +17,7 @@ use tracing::{Instrument, Level, Span, debug_span, event, info_span};
 use crate::polling::{
     KeyContract,
     error::TaskCancellationError,
+    schedule,
     task::{Task, TaskState},
     trigger::{_ScheduleTrigger, ScheduleTrigger},
 };
@@ -46,7 +47,7 @@ const DEFAULT_LOCKFILE_PATH: &str = "/tmp/not-yet.lock";
 #[cfg(all(feature = "daemon", target_os = "macos"))]
 const DEFAULT_LOCKFILE_PATH: &str = "/tmp/not-yet.pid";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum QueueType {
     Exising,
     New,
@@ -76,7 +77,7 @@ impl<K: KeyContract> FromIterator<Schedule<K>> for Scheduler<K> {
         }
         event!(Level::DEBUG, "loaded {} schedules", schedules.len());
 
-        let (tx, rx) = broadcast::channel(1);
+        let (tx, rx) = broadcast::channel(16);
         Self {
             task_queue: Arc::new(RwLock::new(task_queue)),
             schedules: Arc::new(RwLock::new(schedules)),
@@ -87,7 +88,7 @@ impl<K: KeyContract> FromIterator<Schedule<K>> for Scheduler<K> {
 
 impl<K: KeyContract> Scheduler<K> {
     pub fn new() -> Self {
-        let (tx, rx) = broadcast::channel(1);
+        let (tx, rx) = broadcast::channel(16);
         Self {
             task_queue: Arc::new(RwLock::new(HashMap::new())),
             schedules: Arc::new(RwLock::new(Vec::new())),
@@ -134,15 +135,15 @@ impl<K: KeyContract> Scheduler<K> {
             let mut tq = self.task_queue.write().await;
             let queue_type = match tq.get_mut(schedule.key()) {
                 Some(bt) => {
+                    event!(Level::DEBUG, "pushing task {task:?} to queue");
                     bt.push(task);
-                    event!(Level::DEBUG, "pushing task to queue");
                     QueueType::Exising
                 }
                 None => {
+                    event!(Level::DEBUG, "created new task queue with task {task:?}");
                     let mut bt = BinaryHeap::new();
                     bt.push(task);
                     tq.insert(schedule.key().clone(), bt);
-                    event!(Level::DEBUG, "created new task queue");
                     QueueType::New
                 }
             };
@@ -200,17 +201,23 @@ impl<K: KeyContract> Scheduler<K> {
                         }
                     }
                     tokio::select! {
-                        schedule = reschedule_rx.recv() => {
-                            if let Ok((_, schedule)) = schedule
-                                && key.is_none_or(|k| schedule.key() == k)
-                                && schedule.get_next_run_time().is_some_and(|t| t < current_task.due_time())
-                            {
-                                span.in_scope(|| event!(Level::DEBUG, "signaled to cancel"));
-                                yield Err(TaskCancellationError)
-                            } else {
-                                span.in_scope(|| event!(Level::DEBUG, "signaled to retry"));
-                                continue
-                            }
+                        Some(_) =
+                                async {
+                                    reschedule_rx.recv().await.ok().and_then(|(_, schedule)| {
+                                        if key.is_none_or(|k| schedule.key() == k)
+                                            && schedule
+                                                .get_next_run_time()
+                                                .is_some_and(|t| t < current_task.due_time())
+                                        {
+                                            Some(schedule)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                }
+                            => {
+                            span.in_scope(|| event!(Level::DEBUG, "signaled to cancel in favor of a run time ahead"));
+                            yield Err(TaskCancellationError)
                         }
                         _ = tokio::time::sleep_until(due_time.into()) => {
                             span.in_scope(|| event!(Level::DEBUG, "signaled to run"));
@@ -238,8 +245,23 @@ impl<K: KeyContract> Scheduler<K> {
     pub async fn until_next_reschedule(&self) -> Result<QueueType, RecvError> {
         let mut rx = self.schedules_notify.0.subscribe();
 
-        while rx.try_recv().is_ok() {}
-        Ok(rx.recv().await?.0)
+        async {
+            loop {
+                match rx.recv().await {
+                    Ok((t, s)) => {
+                        event!(Level::TRACE, "received {t:?} from {s:?}");
+                        return Ok(t);
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        event!(Level::TRACE, "lagged {n}, ignorning");
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        .instrument(debug_span!("until_next_reschedule"))
+        .await
     }
 
     #[cfg(feature = "daemon")]

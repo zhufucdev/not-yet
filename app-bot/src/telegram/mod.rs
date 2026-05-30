@@ -152,7 +152,9 @@ pub(super) async fn main() -> anyhow::Result<()> {
                                 },
                             }
                         },
-                        Ok(QueueType::New) = scheduler.until_next_reschedule() => {},
+                        Some(()) = async { loop { if let Ok(QueueType::New) = scheduler.until_next_reschedule().await { return Some(()) }; } } => {
+                            event!(Level::DEBUG, "reschedule triggered");
+                        },
                     }
                 }
             }
@@ -228,6 +230,7 @@ async fn start_polling_all(
     bot: &Bot,
 ) -> anyhow::Result<()> {
     let tasks = scheduler.schedules().await.into_iter().map(|schedule| {
+        event!(Level::TRACE, "start polling all");
         let scheduler = scheduler.clone();
         let sub_id = *schedule.key();
         async move {
