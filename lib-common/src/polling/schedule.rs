@@ -269,6 +269,7 @@ impl<K: KeyContract> Scheduler<K> {
             }
         }
 
+        event!(Level::DEBUG, "locking {}", LOCKFILE_PATH);
         let path = Path::new(LOCKFILE_PATH);
         let pid = process::id();
         let pid_str = pid.to_string();
