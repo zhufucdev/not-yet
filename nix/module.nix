@@ -90,7 +90,7 @@ in
             ++ lib.optional (cfg.extraEnv != null) cfg.extraEnv;
           DynamicUser = true;
           RuntimeDirectory = [ "not-yet" ];
-          RuntimeDirectoryMode = "0666";
+          RuntimeDirectoryMode = "0754";
           WorkingDirectory = cfg.dataPath;
           StateDirectory = [ (lib.removePrefix "/var/lib/" cfg.dataPath) ];
           ReadWritePaths = [ cfg.dataPath ];
