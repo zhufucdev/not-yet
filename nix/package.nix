@@ -31,7 +31,7 @@ let
       buildInputs
       ;
 
-    cargoExtraArgs = lib.concatMapStringsSep " " (f: "--features ${f}") features;
+    cargoExtraArgs = lib.concatMapStringsSep "," (f: "--features ${f}") features;
     # Tell crane not to run tests in the build phase
     doCheck = false;
   };
