@@ -87,6 +87,7 @@ in
             + lib.optionalString (cfg.extraOpts != null) cfg.extraOpts;
           Environment = lib.optional (cfg.extraEnv != null) cfg.extraEnv;
           DynamicUser = true;
+          PrivateTmp = false;
           WorkingDirectory = cfg.dataPath;
           StateDirectory = [ (lib.removePrefix "/var/lib/" cfg.dataPath) ];
           ReadWritePaths = [ cfg.dataPath ];
