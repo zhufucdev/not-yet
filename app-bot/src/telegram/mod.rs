@@ -428,7 +428,7 @@ async fn start(
         }
         Ok(Access::Denied) => {
             dialog.update(State::Authenticating).await?;
-            bot.send_message(msg.chat_id().unwrap(), "Good days! Nice to see you! I can ping you update messages as instructed. To get started, paste here the one-time access token. You can get it from the console").await?;
+            bot.send_message(msg.chat_id().unwrap(), "Good day! Nice to see you! I can ping you update messages as instructed. To get started, paste here the one-time access token. You can get it from the console").await?;
         }
         Err(err) => {
             event!(Level::ERROR, "failed to get access: {err}");
@@ -472,6 +472,8 @@ async fn authenticate(
             authenticator
                 .grant(user.id.0 as UserId, AccessLevel::OnetimeToken)
                 .await?;
+            current_token.rotate().await;
+            println!("rotated token: {}", current_token.value().await);
             Ok(())
         }()
         .await
