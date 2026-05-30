@@ -1,6 +1,6 @@
 # Not Yet
-n
-nUse LLM for notification filtering.
+
+Use LLM for notification filtering.
 
 ## Features
 
