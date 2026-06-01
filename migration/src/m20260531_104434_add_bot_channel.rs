@@ -12,6 +12,7 @@ impl MigrationTrait for Migration {
             .create_table(
                 Table::create()
                     .table(Notify::Table)
+                    .if_not_exists()
                     .col(
                         ColumnDef::new(Notify::Id)
                             .integer()
@@ -30,6 +31,13 @@ impl MigrationTrait for Migration {
                     .table(Subscription::Table, "subscription_")
                     .to_owned(),
             )
+            .await?;
+        manager
+            .get_connection()
+            .execute_raw(Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                "PRAGMA foreign_keys = OFF;",
+            ))
             .await?;
         manager
             .create_table(
@@ -91,7 +99,7 @@ impl MigrationTrait for Migration {
             .get_connection()
             .execute_raw(Statement::from_string(
                 sea_orm::DatabaseBackend::Sqlite,
-                r#"PRAGMA foreign_keys = OFF; INSERT INTO `subscription` SELECT * FROM `subscription_`; "#,
+                r#"INSERT INTO `subscription` (id, cron, interval_mins, condition, user_id, kind, buffer_size) SELECT * FROM `subscription_`;"#,
             ))
             .await?;
         manager
