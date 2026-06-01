@@ -240,8 +240,7 @@ async fn start_polling_all(
         let scheduler = scheduler.clone();
         let sub_id = *schedule.key();
         async move {
-            let Some((sub, dest)) = subscription::Entity::find_by_id(sub_id)
-                .find_also_related(notify::Entity)
+            let Some(sub) = subscription::Entity::find_by_id(sub_id)
                 .one(db)
                 .await?
             else {
@@ -265,7 +264,6 @@ async fn start_polling_all(
                         &feed,
                         feed.url(),
                         &sub,
-                        dest.as_ref(),
                         &runner,
                         &scheduler,
                         db,
@@ -283,7 +281,6 @@ async fn start_polling_all(
                         &feed,
                         feed.url(),
                         &sub,
-                        dest.as_ref(),
                         &runner,
                         &scheduler,
                         db,
@@ -306,7 +303,6 @@ async fn send_update_messages<Feed_>(
     feed: &Feed_,
     feed_url: &str,
     sub: &subscription::Model,
-    dest: Option<&notify::Model>,
     runner: &OllamaRunner,
     scheduler: &Scheduler<SubscriptionId>,
     db: &DatabaseConnection,
@@ -378,6 +374,7 @@ where
                     .to_string()
                 }
             };
+            let dest = sub.find_related(notify::Entity).one(db).await?;
             let recipient: Recipient = dest
                 .map(|d| d.into())
                 .unwrap_or_else(|| UserId(sub.user_id as u64).into());
