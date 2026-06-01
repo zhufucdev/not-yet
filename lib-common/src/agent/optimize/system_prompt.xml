@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<prompt>
+  <p>Your task is to provide suggestions or take actions to finetune the notification. Please utilize your function calling capability. It's ok if you don't have concrete actions, and please ask for further clarification.</p>
+</prompt>

@@ -39,7 +39,10 @@ use crate::{
     },
     error::NaE,
     ollama::OllamaSharedChatHistory,
-    runner::{OllamaRunner, ollama},
+    runner::{
+        OllamaRunner,
+        ollama::{self, SystemPromptAwareChatHistory},
+    },
 };
 
 pub struct LlmOptimizer<Runner, DiaMem, CriMem, ClarHandler, Schedule> {
@@ -129,7 +132,11 @@ where
         let generator = settings.into_generator();
 
         let parameters = generator.into_root_schema_for::<T::Params>();
-        event!(Level::DEBUG, "extra tool: {}, schema: {parameters:#?}", T::name());
+        event!(
+            Level::DEBUG,
+            "extra tool: {}, schema: {parameters:#?}",
+            T::name()
+        );
 
         let info = ToolInfo {
             tool_type: ToolType::Function,
@@ -198,7 +205,7 @@ struct RequireClarification<Ch> {
 impl<History, DiaMem, CriMem, ClarHandler, Schedule> Optimizer<History>
     for LlmOptimizer<OllamaRunner, DiaMem, CriMem, ClarHandler, Schedule>
 where
-    History: ChatHistory + Default + Clone + Debug + Send + Sync + 'static,
+    History: SystemPromptAwareChatHistory + Default + Clone + Debug + Send + Sync + 'static,
     ClarHandler: ClarificationReqHandler + Sync + 'static,
     ClarHandler::Error: Send + Sync + 'static,
     Schedule: ScheduleParamterAccessor + Sync + 'static,
@@ -288,34 +295,28 @@ where
                 .add_tool(RequireClarification {
                     handler: clarification_handler.clone(),
                 });
+
+            if history.borrow().system_prompt().is_none() {
+                let system_prompt = ollama::chat_message_from_shared(
+                    template::expand_prompt::<NaE>(
+                        include_str!("./system_prompt.xml"),
+                        &Default::default(),
+                        &Default::default(),
+                    )
+                    .await
+                    .expect("system prompt failed"),
+                    MessageRole::System,
+                )
+                .content;
+                history.borrow_mut().update_system_prompt(system_prompt);
+            }
+
             let mut res = coordinator
                 .chat({
-                    let initial_prompt = if state.try_read().unwrap().checked.is_empty() {
-                        let literals = [(
-                            "user_prompt".into(),
-                            prompt
-                                .map(|p| p.to_string())
-                                .unwrap_or(DEFAULT_PROMPT.into()),
-                        )]
-                        .into_iter()
-                        .collect();
-                        template::expand_prompt::<NaE>(
-                            include_str!("./prompt.xml"),
-                            &literals,
-                            &Default::default(),
-                        )
-                        .await
-                        .expect("initial prompt failed")
-                    } else {
-                        [prompt
+                    vec![ChatMessage::user(
+                        prompt
                             .map(|p| p.to_string())
-                            .unwrap_or(DEFAULT_PROMPT.into())
-                            .into()]
-                        .into()
-                    };
-                    vec![ollama::chat_message_from_shared(
-                        initial_prompt,
-                        MessageRole::User,
+                            .unwrap_or(DEFAULT_PROMPT.into()),
                     )]
                 })
                 .await?;

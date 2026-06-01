@@ -21,6 +21,11 @@ pub struct OllamaRunner {
     pub model_name: SmolStr,
 }
 
+pub trait SystemPromptAwareChatHistory: ChatHistory {
+    fn update_system_prompt(&mut self, content: impl ToString);
+    fn system_prompt(&self) -> Option<&str>;
+}
+
 impl super::Runner for OllamaRunner {}
 
 impl Default for OllamaRunner {
@@ -62,4 +67,26 @@ pub fn chat_message_from_shared(
         SharedImageOrText::Text(text) => texts.push_str(format!("{text}\n").as_str()),
     });
     ChatMessage::new(role, texts.trim_end().to_string()).with_images(images)
+}
+
+impl SystemPromptAwareChatHistory for Vec<ChatMessage> {
+    fn update_system_prompt(&mut self, content: impl ToString) {
+        if let Some(first) = self.first_mut()
+            && first.role == MessageRole::System
+        {
+            first.content = content.to_string();
+        } else {
+            self.insert(0, ChatMessage::system(content.to_string()));
+        }
+    }
+
+    fn system_prompt(&self) -> Option<&str> {
+        self.first().and_then(|p| {
+            if p.role == MessageRole::System {
+                Some(p.content.as_str())
+            } else {
+                None
+            }
+        })
+    }
 }
