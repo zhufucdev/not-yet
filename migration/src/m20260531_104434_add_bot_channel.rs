@@ -26,13 +26,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
         manager
-            .rename_table(
-                Table::rename()
-                    .table(Subscription::Table, "subscription_")
-                    .to_owned(),
-            )
-            .await?;
-        manager
             .get_connection()
             .execute_raw(Statement::from_string(
                 sea_orm::DatabaseBackend::Sqlite,
@@ -42,7 +35,7 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table(Subscription::Table)
+                    .table("subscription_")
                     .if_not_exists()
                     .col(
                         ColumnDef::new(Subscription::Id)
@@ -99,11 +92,18 @@ impl MigrationTrait for Migration {
             .get_connection()
             .execute_raw(Statement::from_string(
                 sea_orm::DatabaseBackend::Sqlite,
-                r#"INSERT INTO `subscription` (id, cron, interval_mins, condition, user_id, kind, buffer_size) SELECT * FROM `subscription_`;"#,
+                r#"INSERT INTO `subscription_` (id, cron, interval_mins, condition, user_id, kind, buffer_size) SELECT * FROM `subscription`;"#,
             ))
             .await?;
         manager
-            .drop_table(Table::drop().table("subscription_").to_owned())
+            .drop_table(Table::drop().table(Subscription::Table).to_owned())
+            .await?;
+        manager
+            .rename_table(
+                Table::rename()
+                    .table("subscription_", Subscription::Table)
+                    .to_owned(),
+            )
             .await?;
         manager
             .get_connection()
