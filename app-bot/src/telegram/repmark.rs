@@ -1,7 +1,7 @@
 use teloxide::{
     Bot,
     dispatching::dialogue::GetChatId,
-    payloads::EditMessageReplyMarkupSetters,
+    payloads::{EditMessageReplyMarkupSetters, SendMessage, SendMessageSetters},
     prelude::Requester,
     types::{
         CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardButtonKind,

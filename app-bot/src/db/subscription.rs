@@ -5,7 +5,7 @@ use lib_common::polling::trigger::ScheduleTrigger;
 use sea_orm::prelude::*;
 
 use crate::UserId;
-use crate::db::{atom, rss};
+use crate::db::{atom, notify, rss};
 
 use super::user;
 
@@ -22,10 +22,13 @@ pub struct Model {
     pub interval_mins: Option<i32>,
     pub condition: String,
     pub user_id: UserId,
+    pub notify_id: Option<i32>,
     #[sea_orm(default_value = "0")]
     pub kind: Kind,
     #[sea_orm(belongs_to, from = "user_id", to = "id")]
     pub user: HasOne<user::Entity>,
+    #[sea_orm(belongs_to, from = "notify_id", to = "id")]
+    pub notify: HasOne<notify::Entity>,
     #[sea_orm(default_value = "i32::MAX")]
     pub buffer_size: i32,
 

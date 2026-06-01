@@ -8,6 +8,11 @@ mod m20260404_171549_create_bot_db_atom_table;
 mod m20260405_071428_add_bot_db_sub_buffer_size;
 mod m20260501_112246_add_criteria_mem_table;
 mod m20260501_134800_add_bot_db_msg_id_by_dialog_id;
+mod m20260531_104434_add_bot_channel;
+
+pub(crate) mod id_notify;
+pub(crate) mod id_subscription;
+pub(crate) mod id_user;
 
 pub struct Migrator;
 
@@ -28,6 +33,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260501_112246_add_criteria_mem_table::Migration),
             #[cfg(feature = "bot")]
             Box::new(m20260501_134800_add_bot_db_msg_id_by_dialog_id::Migration),
+            #[cfg(feature = "bot")]
+            Box::new(m20260531_104434_add_bot_channel::Migration),
         ]
     }
 }

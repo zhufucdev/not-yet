@@ -1,5 +1,7 @@
 use sea_orm_migration::prelude::*;
 
+use crate::{id_subscription::Subscription, id_user::User};
+
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -121,28 +123,6 @@ impl MigrationTrait for Migration {
     }
 }
 
-/// Identifiers for the `user` table.
-/// Note: SeaORM's `rename_all = "camelCase"` affects column naming at the ORM
-/// layer; the underlying DB columns use the field names as-is unless explicitly
-/// renamed. Column names here match what the derive macro emits for a camelCase
-/// table — adjust if your DB driver applies the rename to column identifiers.
-#[derive(DeriveIden, Clone)]
-enum User {
-    Table,
-    Id,
-    AccessLevel,
-}
-
-/// Identifiers for the `subscription` table.
-#[derive(DeriveIden, Clone)]
-enum Subscription {
-    Table,
-    Id,
-    Cron,
-    IntervalMins,
-    Condition,
-    UserId,
-}
 
 /// Identifiers for the `rss` table.
 #[derive(DeriveIden, Clone)]

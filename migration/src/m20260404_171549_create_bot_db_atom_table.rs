@@ -1,5 +1,7 @@
 use sea_orm_migration::{prelude::*, schema::*};
 
+use crate::id_subscription::Subscription;
+
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -61,11 +63,4 @@ enum Atom {
     BrowserUa,
     Headers,
     SubscriptionId,
-}
-
-/// Identifiers for the `subscription` table.
-#[derive(DeriveIden, Clone)]
-enum Subscription {
-    Table,
-    Id,
 }

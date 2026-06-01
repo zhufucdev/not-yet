@@ -5,3 +5,4 @@ pub mod header;
 pub mod rss;
 pub mod subscription;
 pub mod user;
+pub mod notify;

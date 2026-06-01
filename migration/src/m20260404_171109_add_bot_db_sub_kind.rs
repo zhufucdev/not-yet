@@ -1,5 +1,7 @@
 use sea_orm_migration::{prelude::*, schema::*};
 
+use crate::id_subscription::Subscription;
+
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -31,11 +33,4 @@ impl MigrationTrait for Migration {
             )
             .await
     }
-}
-
-/// Identifiers for the `subscription` table.
-#[derive(DeriveIden, Clone)]
-enum Subscription {
-    Table,
-    Kind,
 }

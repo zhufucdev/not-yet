@@ -26,9 +26,12 @@ use lib_common::{
     update::sqlite::SqliteUpdatePersistence,
 };
 use ollama_rs::generation::chat::ChatMessage;
-use sea_orm::{ActiveEnum, ColumnTrait, DatabaseConnection, EntityTrait, Iterable, QueryFilter};
+use sea_orm::{
+    ActiveEnum, ColumnTrait, DatabaseConnection, EntityTrait, Iterable, ModelTrait, QueryFilter,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::SmolStr;
+use teloxide::types::Recipient;
 use teloxide::utils::render::RenderMessageTextHelper;
 use teloxide::{
     dispatching::{
@@ -43,6 +46,8 @@ use tokio::sync::RwLock;
 use tracing::{Instrument, Level, event, info_span};
 use tracing_subscriber::EnvFilter;
 
+use crate::db::notify;
+use crate::telegram::renotify::SetReceipientTool;
 use crate::telegram::state::{LlmAssignment, OptimizationTask, StateFeedback};
 use crate::{
     authenticator::{
@@ -63,6 +68,7 @@ use crate::{
 mod args;
 mod clarify;
 mod command;
+mod renotify;
 mod repmark;
 mod state;
 
@@ -234,15 +240,19 @@ async fn start_polling_all(
         let scheduler = scheduler.clone();
         let sub_id = *schedule.key();
         async move {
-            let Some((sub, rss, atom)) = subscription::Entity::find_by_id(sub_id)
-                .find_also_related(rss::Entity)
-                .find_also_related(atom::Entity)
+            let Some((sub, dest)) = subscription::Entity::find_by_id(sub_id)
+                .find_also_related(notify::Entity)
                 .one(db)
                 .await?
             else {
                 event!(Level::ERROR, "failed to find subscription from id");
                 return Ok(());
             };
+            let (rss, atom) = future::try_join(
+                sub.find_related(rss::Entity).one(db),
+                sub.find_related(atom::Entity).one(db),
+            )
+            .await?;
 
             match sub.kind {
                 subscription::Kind::Rss => {
@@ -255,6 +265,7 @@ async fn start_polling_all(
                         &feed,
                         feed.url(),
                         &sub,
+                        dest.as_ref(),
                         &runner,
                         &scheduler,
                         db,
@@ -272,6 +283,7 @@ async fn start_polling_all(
                         &feed,
                         feed.url(),
                         &sub,
+                        dest.as_ref(),
                         &runner,
                         &scheduler,
                         db,
@@ -294,6 +306,7 @@ async fn send_update_messages<Feed_>(
     feed: &Feed_,
     feed_url: &str,
     sub: &subscription::Model,
+    dest: Option<&notify::Model>,
     runner: &OllamaRunner,
     scheduler: &Scheduler<SubscriptionId>,
     db: &DatabaseConnection,
@@ -365,7 +378,10 @@ where
                     .to_string()
                 }
             };
-            let tg_msg = bot.send_message(UserId(sub.user_id as u64), msg).await?;
+            let recipient: Recipient = dest
+                .map(|d| d.into())
+                .unwrap_or_else(|| UserId(sub.user_id as u64).into());
+            let tg_msg = bot.send_message(recipient, msg).await?;
             db::dialog::ActiveModel::builder()
                 .set_dialog_id(&dialog_id)
                 .set_msg_id(tg_msg.id.0)
@@ -860,13 +876,22 @@ async fn receive_feedback_msg(
                 return Ok(());
             };
             let dialog_mem = FsDialogMemory::<Vec<ChatMessage>>::new(working_dir, model.dialog_id);
-            let optimizer = Arc::new(LlmOptimizer::new(
-                runner,
-                dialog_mem.clone(),
-                SqliteCriteriaMemory::new(db.clone(), Some(model.subscription_id)),
-                clarify::TgClarReqHandler::new(bot.clone(), chat_id, dialog.clone()),
-                subscription::ModelParamterAccessor::new(db.clone(), sub),
-            ));
+            let optimizer = Arc::new(
+                LlmOptimizer::new(
+                    runner,
+                    dialog_mem.clone(),
+                    SqliteCriteriaMemory::new(db.clone(), Some(model.subscription_id)),
+                    clarify::TgClarReqHandler::new(bot.clone(), chat_id, dialog.clone()),
+                    subscription::ModelParamterAccessor::new(db.clone(), sub),
+                )
+                .add_tool(SetReceipientTool {
+                    chat_id,
+                    sub_id: model.subscription_id,
+                    db: db.clone(),
+                    bot: bot.clone(),
+                    dialog: dialog.clone(),
+                }),
+            );
             if let Some(decision_dialog) = dialog_mem.get().await? {
                 let optimization = optimizer.optimize(msg.text(), decision_dialog);
                 dialog
