@@ -791,7 +791,14 @@ async fn receive_feedback_msg(
     runner: OllamaRunner,
     dialog: MasterDialog,
     working_dir: PathBuf,
+    authenticator: Arc<Authenticator>,
 ) -> anyhow::Result<()> {
+    let Some(sender) = &msg.from else {
+        return Ok(());
+    };
+    if !matches!(authenticator.get_access(&(sender.id.0 as UserId)).await?, Access::Granted(_)) {
+        return Ok(());
+    }
     let chat_id = msg.chat_id().unwrap();
     if let Some(State::Feedingback { tasks }) = dialog.get().await? {
         event!(Level::TRACE, "state = feedback");
