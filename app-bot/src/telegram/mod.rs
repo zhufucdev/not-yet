@@ -890,10 +890,8 @@ async fn receive_feedback_msg(
                     subscription::ModelParamterAccessor::new(db.clone(), sub),
                 )
                 .add_tool(SetReceipientTool {
-                    chat_id,
                     sub_id: model.subscription_id,
                     db: db.clone(),
-                    dialog: dialog.clone(),
                 }),
             );
             if let Some(decision_dialog) = dialog_mem.get().await? {

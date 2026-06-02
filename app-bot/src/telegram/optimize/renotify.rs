@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use teloxide::{
     Bot,
     prelude::Requester,
-    types::{ChatFullInfo, ChatId, Recipient, User, UserId},
+    types::{ChatFullInfo, Recipient, User, UserId},
 };
 use tokio::sync::mpsc;
 
@@ -20,14 +20,12 @@ use crate::{
         notify,
         subscription::{self, SubscriptionId},
     },
-    telegram::{MasterDialog, optimize::TgOptimizerAction},
+    telegram::optimize::TgOptimizerAction,
 };
 
 pub struct SetReceipientTool {
-    pub chat_id: ChatId,
     pub sub_id: SubscriptionId,
     pub db: DatabaseConnection,
-    pub dialog: MasterDialog,
 }
 
 impl Tool<TgOptimizerAction> for SetReceipientTool {
