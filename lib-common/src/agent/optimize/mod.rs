@@ -14,15 +14,22 @@ mod test;
 #[trait_variant::make(Send)]
 pub trait Optimizer<Dialog> {
     type Error;
+    type ExtraAction;
     fn optimize(
         &self,
         prompt: Option<impl ToString + Send>,
         dialog: Dialog,
-    ) -> OptimizationCallback<Self::Error>;
+    ) -> OptimizationCallback<Self::Error, Self::ExtraAction>;
 }
 
 #[derive(Debug, Clone)]
-pub enum OptimizerAction {
+pub enum OptimizerAction<Extra> {
+    Basic(BasicOptimizerAction),
+    Extra(Extra),
+}
+
+#[derive(Debug, Clone)]
+pub enum BasicOptimizerAction {
     ContextPrefill(Vec<String>),
     Schedule(ScheduleParamters),
 }
@@ -33,8 +40,8 @@ pub enum ApproveOrDeny {
     Deny { reason: Option<String> },
 }
 
-pub struct OptimizationCallback<Error> {
-    action_rx: mpsc::Receiver<(OptimizerAction, mpsc::Sender<ApproveOrDeny>)>,
+pub struct OptimizationCallback<Error, ExtraAction> {
+    action_rx: mpsc::Receiver<(OptimizerAction<ExtraAction>, mpsc::Sender<ApproveOrDeny>)>,
     task_completion: mpsc::Receiver<()>,
     task_handle: Option<tokio::task::JoinHandle<Result<(), Error>>>,
 }
@@ -62,13 +69,16 @@ pub trait ClarificationReqHandler {
     async fn on_request(&self, prompt: &str) -> Result<Option<String>, Self::Error>;
 }
 
-impl<Error> OptimizationCallback<Error>
+pub type Actor<T> = mpsc::Sender<(T, mpsc::Sender<ApproveOrDeny>)>;
+
+impl<Error, ExtraAction> OptimizationCallback<Error, ExtraAction>
 where
     Error: Display,
+    ExtraAction: Send + 'static,
 {
     pub fn new<F, Fut>(task: F) -> Self
     where
-        F: FnOnce(mpsc::Sender<(OptimizerAction, mpsc::Sender<ApproveOrDeny>)>) -> Fut
+        F: FnOnce(mpsc::Sender<(OptimizerAction<ExtraAction>, mpsc::Sender<ApproveOrDeny>)>) -> Fut
             + Send
             + 'static,
         Fut: Future<Output = Result<(), Error>> + Send + 'static,
@@ -95,7 +105,7 @@ where
 
     pub async fn accept(
         &mut self,
-    ) -> Result<Option<(OptimizerAction, mpsc::Sender<ApproveOrDeny>)>, Error> {
+    ) -> Result<Option<(OptimizerAction<ExtraAction>, mpsc::Sender<ApproveOrDeny>)>, Error> {
         if self.task_handle.is_none() {
             return Ok(None);
         }

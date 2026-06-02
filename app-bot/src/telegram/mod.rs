@@ -15,7 +15,7 @@ use lib_common::agent::memory::dialog::DialogMemory;
 use lib_common::agent::memory::dialog::fs::FsDialogMemory;
 use lib_common::agent::optimize::llm::LlmOptimizer;
 use lib_common::agent::optimize::{
-    ApproveOrDeny, OptimizationCallback, Optimizer, OptimizerAction,
+    ApproveOrDeny, BasicOptimizerAction, OptimizationCallback, Optimizer, OptimizerAction,
 };
 use lib_common::runner::OllamaRunner;
 use lib_common::secure;
@@ -47,7 +47,8 @@ use tracing::{Instrument, Level, event, info_span};
 use tracing_subscriber::EnvFilter;
 
 use crate::db::notify;
-use crate::telegram::renotify::SetReceipientTool;
+use crate::telegram::optimize::TgOptimizerAction;
+use crate::telegram::optimize::renotify::SetReceipientTool;
 use crate::telegram::state::{LlmAssignment, OptimizationTask, StateFeedback};
 use crate::{
     authenticator::{
@@ -68,7 +69,7 @@ use crate::{
 mod args;
 mod clarify;
 mod command;
-mod renotify;
+mod optimize;
 mod repmark;
 mod state;
 
@@ -240,10 +241,7 @@ async fn start_polling_all(
         let scheduler = scheduler.clone();
         let sub_id = *schedule.key();
         async move {
-            let Some(sub) = subscription::Entity::find_by_id(sub_id)
-                .one(db)
-                .await?
-            else {
+            let Some(sub) = subscription::Entity::find_by_id(sub_id).one(db).await? else {
                 event!(Level::ERROR, "failed to find subscription from id");
                 return Ok(());
             };
@@ -793,7 +791,10 @@ async fn receive_feedback_msg(
     let Some(sender) = &msg.from else {
         return Ok(());
     };
-    if !matches!(authenticator.get_access(&(sender.id.0 as UserId)).await?, Access::Granted(_)) {
+    if !matches!(
+        authenticator.get_access(&(sender.id.0 as UserId)).await?,
+        Access::Granted(_)
+    ) {
         return Ok(());
     }
     let chat_id = msg.chat_id().unwrap();
@@ -892,7 +893,6 @@ async fn receive_feedback_msg(
                     chat_id,
                     sub_id: model.subscription_id,
                     db: db.clone(),
-                    bot: bot.clone(),
                     dialog: dialog.clone(),
                 }),
             );
@@ -998,7 +998,7 @@ async fn receive_feedback_query(
 }
 
 async fn handle_optimization<Error>(
-    mut optimization: OptimizationCallback<Error>,
+    mut optimization: OptimizationCallback<Error, TgOptimizerAction>,
     bot: Bot,
     chat_id: ChatId,
     dialog: MasterDialog,
@@ -1010,22 +1010,30 @@ where
     let mut actions_required = 0;
     while let Ok(Some((action, approve))) = optimization.accept().await {
         let prompt = match action {
-            OptimizerAction::ContextPrefill(context) => bot.send_message(
-                chat_id,
-                if context.len() == 1 {
-                    format!(
-                        "I would like to add a filtering criterion:\n{}",
-                        context.first().unwrap()
-                    )
-                } else {
-                    format!(
-                        "I would like to add filtering criteria:\n- {}",
-                        context.join("\n- ")
-                    )
-                },
-            ),
-            OptimizerAction::Schedule(schedule) => {
+            OptimizerAction::Basic(BasicOptimizerAction::ContextPrefill(context)) => bot
+                .send_message(
+                    chat_id,
+                    if context.len() == 1 {
+                        format!(
+                            "I would like to add a filtering criterion:\n{}",
+                            context.first().unwrap()
+                        )
+                    } else {
+                        format!(
+                            "I would like to add filtering criteria:\n- {}",
+                            context.join("\n- ")
+                        )
+                    },
+                ),
+            OptimizerAction::Basic(BasicOptimizerAction::Schedule(schedule)) => {
                 bot.send_message(chat_id, format!("Better to reschedule this as {schedule}"))
+            }
+            OptimizerAction::Extra(TgOptimizerAction::SetReceipient(recipient)) => {
+                let represntation = recipient.as_representation(chat_id, &bot).await?;
+                bot.send_message(
+                    chat_id,
+                    format!("I want to redirect notifications to {represntation}"),
+                )
             }
         }
         .reply_markup(repmark::button_repmark([vec![

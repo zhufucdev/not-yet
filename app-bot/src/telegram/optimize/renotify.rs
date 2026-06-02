@@ -2,7 +2,7 @@ use std::{borrow::Cow, fmt::Display};
 
 use itertools::Itertools;
 use lib_common::agent::optimize::{
-    ApproveOrDeny,
+    Actor, ApproveOrDeny,
     llm::{SystemResult, ToToolResult, Tool, ToolHandlerError, ToolResult},
 };
 use ollama_rs::re_exports::schemars::JsonSchema;
@@ -10,7 +10,6 @@ use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseConnection, EntityTrait, In
 use serde::{Deserialize, Serialize};
 use teloxide::{
     Bot,
-    payloads::SendMessageSetters,
     prelude::Requester,
     types::{ChatFullInfo, ChatId, Recipient, User, UserId},
 };
@@ -21,21 +20,17 @@ use crate::{
         notify,
         subscription::{self, SubscriptionId},
     },
-    telegram::{
-        MasterDialog, repmark,
-        state::{LlmAssignment, OptimizationTask, StateFeedback},
-    },
+    telegram::{MasterDialog, optimize::TgOptimizerAction},
 };
 
 pub struct SetReceipientTool {
     pub chat_id: ChatId,
     pub sub_id: SubscriptionId,
     pub db: DatabaseConnection,
-    pub bot: Bot,
     pub dialog: MasterDialog,
 }
 
-impl Tool for SetReceipientTool {
+impl Tool<TgOptimizerAction> for SetReceipientTool {
     const IS_ACTION: bool = true;
 
     const RETRIEVER_TOOL_NAME: Option<&'static str> = None;
@@ -50,37 +45,21 @@ impl Tool for SetReceipientTool {
         "change where to push update notifications to"
     }
 
-    async fn call(&mut self, parameters: Self::Params) -> SystemResult<ToolResult> {
+    async fn call(
+        &mut self,
+        parameters: Self::Params,
+        action: Actor<TgOptimizerAction>,
+    ) -> SystemResult<ToolResult> {
         let sane_recipient = {
             let r: SetRecipient = parameters.into();
             r.santized()
         };
-        let recipient = sane_recipient
-            .as_representation(self.chat_id, &self.bot)
-            .await?;
-        let prompt = self
-            .bot
-            .send_message(
-                self.chat_id,
-                format!("I want to redirect notifications to {recipient}"),
-            )
-            .reply_markup(repmark::button_repmark([vec![
-                ("Approve", "y"),
-                ("Deny", "n"),
-            ]]))
-            .await?;
         let (res_tx, mut res_rx) = mpsc::channel(1);
-        self.dialog
-            .update(
-                self.dialog
-                    .get_or_default()
-                    .await?
-                    .with_task_queued([OptimizationTask {
-                        prompt,
-                        assignment: LlmAssignment::Review { approve: res_tx },
-                    }])
-                    .await,
-            )
+        action
+            .send((
+                TgOptimizerAction::SetReceipient(sane_recipient.clone()),
+                res_tx,
+            ))
             .await?;
         let Some(action) = res_rx.recv().await else {
             return Err(Box::new(ToolHandlerError::ChannelClosed));
@@ -95,19 +74,16 @@ impl Tool for SetReceipientTool {
                 return Err(format!("subscription {} not found", self.sub_id).into());
             };
             let destination = match sane_recipient {
-                SetRecipient::User(id) => {
-                    let notice = self.bot.send_message(UserId(id), "Hi!").await?;
-                    Some(
-                        notify::ActiveModel {
-                            kind: ActiveValue::Set(notify::Kind::Chat),
-                            chat_id: ActiveValue::Set(Some(notice.chat.id.0)),
-                            ..Default::default()
-                        }
-                        .insert(&self.db)
-                        .await?
-                        .id,
-                    )
-                }
+                SetRecipient::User(id) => Some(
+                    notify::ActiveModel {
+                        kind: ActiveValue::Set(notify::Kind::Chat),
+                        chat_id: ActiveValue::Set(Some(id as i64)),
+                        ..Default::default()
+                    }
+                    .insert(&self.db)
+                    .await?
+                    .id,
+                ),
                 SetRecipient::Channel(id) => Some(
                     notify::ActiveModel {
                         kind: ActiveValue::Set(notify::Kind::Channel),
@@ -124,8 +100,7 @@ impl Tool for SetReceipientTool {
             sub.save(&self.db).await?;
         }
 
-        Ok(action
-            .map_ok(|_| format!("upcoming notifications will be pushed to {recipient}").into()))
+        Ok(action.map_ok(|_| format!("upcoming notifications will be pushed to them").into()))
     }
 }
 
@@ -141,6 +116,7 @@ pub struct SetRecipientParams {
     pub clear: Option<()>,
 }
 
+#[derive(Debug, Clone)]
 pub enum SetRecipient {
     User(u64),
     Channel(String),

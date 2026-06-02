@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod channel;
 pub mod error;
 pub mod polling;
 pub mod runner;

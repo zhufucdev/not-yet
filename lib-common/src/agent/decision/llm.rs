@@ -29,7 +29,7 @@ use ollama_rs::{
     history::ChatHistory,
 };
 use rand::distr::uniform::SampleRange;
-use reqwest::{Url, header::HeaderName};
+use reqwest::Url;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use smol_str::ToSmolStr;

@@ -17,7 +17,6 @@ use tracing::{Instrument, Level, Span, debug_span, event, info_span};
 use crate::polling::{
     KeyContract,
     error::TaskCancellationError,
-    schedule,
     task::{Task, TaskState},
     trigger::{_ScheduleTrigger, ScheduleTrigger},
 };

@@ -15,7 +15,6 @@ use ollama_rs::{
             ToolHolder as OllamaToolHolder, ToolInfo, ToolType,
         },
     },
-    history::ChatHistory,
 };
 use rmcp::model::EmptyObject;
 use schemars::{JsonSchema, generate::SchemaSettings};
@@ -32,11 +31,11 @@ use crate::{
     agent::{
         memory::{criteria::CriteriaMemory, dialog::DialogMemory},
         optimize::{
-            ApproveOrDeny, ClarificationReqHandler, OptimizationCallback, Optimizer,
-            OptimizerAction, ScheduleParamterAccessor, ScheduleParamters,
+            Actor, ApproveOrDeny, BasicOptimizerAction, ClarificationReqHandler, OptimizationCallback, Optimizer, OptimizerAction, ScheduleParamterAccessor, ScheduleParamters
         },
         template,
     },
+    channel::mpsc::MapSender,
     error::NaE,
     ollama::OllamaSharedChatHistory,
     runner::{
@@ -45,13 +44,13 @@ use crate::{
     },
 };
 
-pub struct LlmOptimizer<Runner, DiaMem, CriMem, ClarHandler, Schedule> {
+pub struct LlmOptimizer<Runner, DiaMem, CriMem, ClarHandler, Schedule, ExtraAction> {
     runner: Runner,
     dialog_memory: Arc<RwLock<DiaMem>>,
     criteria_memory: Arc<RwLock<CriMem>>,
     clarification_handler: Arc<ClarHandler>,
     schedule: Arc<RwLock<Schedule>>,
-    extra_tools: HashMap<&'static str, (ExtraToolHolder, ToolInfo, ExtraToolInfo)>,
+    extra_tools: HashMap<&'static str, (ExtraToolHolder<ExtraAction>, ToolInfo, ExtraToolInfo)>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,17 +59,19 @@ struct ExtraToolInfo {
     retriever_tool_name: Option<&'static str>,
 }
 
-struct ExtraToolHolder(Arc<RwLock<Box<dyn ToolHolder + 'static>>>);
+#[derive(Clone)]
+struct ExtraToolHolder<Action>(Arc<RwLock<Box<dyn ToolHolder<Action> + 'static>>>);
 
 #[derive(Clone)]
-struct StatefulExtraToolHolder {
-    inner: Arc<RwLock<Box<dyn ToolHolder + 'static>>>,
+struct StatefulExtraToolHolder<Action> {
+    action: Actor<Action>,
+    inner: Arc<RwLock<Box<dyn ToolHolder<Action> + 'static>>>,
     state: Arc<RwLock<State>>,
     info: ExtraToolInfo,
     name: &'static str,
 }
 
-pub trait Tool: Send + Sync {
+pub trait Tool<Action>: Send + Sync {
     const IS_ACTION: bool;
     const RETRIEVER_TOOL_NAME: Option<&'static str>;
 
@@ -85,13 +86,15 @@ pub trait Tool: Send + Sync {
     fn call(
         &mut self,
         parameters: Self::Params,
+        action: Actor<Action>,
     ) -> impl Future<Output = SystemResult<ToolResult>> + Send;
 }
 
-trait ToolHolder: Send + Sync {
+trait ToolHolder<Action>: Send + Sync {
     fn call(
         &mut self,
         parameters: Value,
+        action: Actor<Action>,
     ) -> Pin<Box<dyn Future<Output = SystemResult<ToolResult>> + '_ + Send>>;
 }
 
@@ -102,12 +105,13 @@ struct State {
     actions_count: u32,
 }
 
-impl<Runner, DiaMem, CriMem, ClarHandler, Schedule>
-    LlmOptimizer<Runner, DiaMem, CriMem, ClarHandler, Schedule>
+impl<Runner, DiaMem, CriMem, ClarHandler, Schedule, ExtraAction>
+    LlmOptimizer<Runner, DiaMem, CriMem, ClarHandler, Schedule, ExtraAction>
 where
     ClarHandler: ClarificationReqHandler,
     Schedule: ScheduleParamterAccessor,
     DiaMem: DialogMemory,
+    ExtraAction: Send + 'static,
 {
     pub fn new(
         runner: Runner,
@@ -126,7 +130,7 @@ where
         }
     }
 
-    pub fn add_tool<T: Tool + 'static>(mut self, tool: T) -> Self {
+    pub fn add_tool<T: Tool<ExtraAction> + 'static>(mut self, tool: T) -> Self {
         let mut settings = SchemaSettings::draft07();
         settings.inline_subschemas = true;
         let generator = settings.into_generator();
@@ -162,12 +166,10 @@ where
     }
 }
 
-type Actor = mpsc::Sender<(OptimizerAction, mpsc::Sender<ApproveOrDeny>)>;
-
 // --- Tools ---
 struct SetPollingInterval<Schedule> {
     state: Arc<RwLock<State>>,
-    action: Arc<Actor>,
+    action: Actor<BasicOptimizerAction>,
     schedule: Arc<RwLock<Schedule>>,
 }
 
@@ -178,7 +180,7 @@ struct GetPollingInterval<Schedule> {
 
 struct SetBufferSize<Schedule> {
     state: Arc<RwLock<State>>,
-    action: Arc<Actor>,
+    action: Actor<BasicOptimizerAction>,
     schedule: Arc<RwLock<Schedule>>,
 }
 
@@ -189,7 +191,7 @@ struct GetBufferSize<Schedule> {
 
 struct AddCriterion<Criteria> {
     state: Arc<RwLock<State>>,
-    action: Arc<Actor>,
+    action: Actor<BasicOptimizerAction>,
     criteria: Arc<RwLock<Criteria>>,
 }
 
@@ -202,8 +204,8 @@ struct RequireClarification<Ch> {
     handler: Arc<Ch>,
 }
 
-impl<History, DiaMem, CriMem, ClarHandler, Schedule> Optimizer<History>
-    for LlmOptimizer<OllamaRunner, DiaMem, CriMem, ClarHandler, Schedule>
+impl<History, DiaMem, CriMem, ClarHandler, Schedule, ExtraAction> Optimizer<History>
+    for LlmOptimizer<OllamaRunner, DiaMem, CriMem, ClarHandler, Schedule, ExtraAction>
 where
     History: SystemPromptAwareChatHistory + Default + Clone + Debug + Send + Sync + 'static,
     ClarHandler: ClarificationReqHandler + Sync + 'static,
@@ -213,14 +215,16 @@ where
     DiaMem::Error: Display + Send + Sync + 'static,
     CriMem: CriteriaMemory + Send + Sync + 'static,
     CriMem::Error: Display,
+    ExtraAction: Send + Clone + 'static,
 {
     type Error = Error<DiaMem::Error>;
+    type ExtraAction = ExtraAction;
 
     fn optimize(
         &self,
         prompt: Option<impl ToString + Send>,
         dialog: History,
-    ) -> OptimizationCallback<Self::Error> {
+    ) -> OptimizationCallback<Self::Error, Self::ExtraAction> {
         const DEFAULT_PROMPT: &str = "I don't like this post.";
         let prompt = prompt.map(|p| p.to_string());
         event!(Level::TRACE, "prompt = {prompt:?}, history = {:#?}", dialog);
@@ -246,28 +250,21 @@ where
             .runner
             .to_coordinator(history.clone())
             .think(ThinkType::High);
-        for (name, (holder, tool_info, extra)) in self.extra_tools.iter() {
-            coordinator = coordinator.add_tool_holder(
-                name,
-                tool_info.clone(),
-                Box::new(StatefulExtraToolHolder {
-                    inner: holder.0.clone(),
-                    info: extra.clone(),
-                    state: state.clone(),
-                    name: name,
-                }),
-            );
-        }
         let schedule = self.schedule.clone();
         let dialog_mem = self.dialog_memory.clone();
         let criteria_mem = self.criteria_memory.clone();
         let clarification_handler = self.clarification_handler.clone();
+        let extra_tools = self.extra_tools.clone();
         OptimizationCallback::new(async move |action| {
-            let action = Arc::new(action);
+            let basic_action = action.clone().map(
+                |(boa, re): (BasicOptimizerAction, mpsc::Sender<ApproveOrDeny>)| {
+                    (OptimizerAction::Basic(boa), re)
+                },
+            );
             coordinator = coordinator
                 .add_tool(SetPollingInterval {
                     state: state.clone(),
-                    action: action.clone(),
+                    action: basic_action.clone(),
                     schedule: schedule.clone(),
                 })
                 .add_tool(GetPollingInterval {
@@ -276,7 +273,7 @@ where
                 })
                 .add_tool(SetBufferSize {
                     state: state.clone(),
-                    action: action.clone(),
+                    action: basic_action.clone(),
                     schedule: schedule.clone(),
                 })
                 .add_tool(GetBufferSize {
@@ -285,7 +282,7 @@ where
                 })
                 .add_tool(AddCriterion {
                     state: state.clone(),
-                    action: action.clone(),
+                    action: basic_action.clone(),
                     criteria: criteria_mem.clone(),
                 })
                 .add_tool(GetCriteria {
@@ -295,6 +292,25 @@ where
                 .add_tool(RequireClarification {
                     handler: clarification_handler.clone(),
                 });
+            let extra_action =
+                action
+                    .clone()
+                    .map(|(eoa, re): (ExtraAction, mpsc::Sender<ApproveOrDeny>)| {
+                        (OptimizerAction::Extra(eoa), re)
+                    });
+            for (name, (holder, tool_info, extra)) in extra_tools.iter() {
+                coordinator = coordinator.add_tool_holder(
+                    name,
+                    tool_info.clone(),
+                    Box::new(StatefulExtraToolHolder::<ExtraAction> {
+                        action: extra_action.clone(),
+                        inner: holder.0.clone(),
+                        info: extra.clone(),
+                        state: state.clone(),
+                        name: name,
+                    }),
+                );
+            }
 
             if history.borrow().system_prompt().is_none() {
                 let system_prompt = ollama::chat_message_from_shared(
@@ -432,7 +448,7 @@ where
         let new_value = parameters.new_value;
         self.action
             .send((
-                OptimizerAction::Schedule(ScheduleParamters {
+                BasicOptimizerAction::Schedule(ScheduleParamters {
                     interval_mins: Some(new_value),
                     buffer_size: None,
                 }),
@@ -524,7 +540,7 @@ where
         let (tx, mut rx) = mpsc::channel(1);
         self.action
             .send((
-                OptimizerAction::Schedule(ScheduleParamters {
+                BasicOptimizerAction::Schedule(ScheduleParamters {
                     interval_mins: None,
                     buffer_size: Some(new_value),
                 }),
@@ -620,7 +636,10 @@ where
         let content = parameters.content;
         let (tx, mut rx) = mpsc::channel(1);
         self.action
-            .send((OptimizerAction::ContextPrefill(vec![content.clone()]), tx))
+            .send((
+                BasicOptimizerAction::ContextPrefill(vec![content.clone()]),
+                tx,
+            ))
             .await?;
         match rx.recv().await {
             Some(ApproveOrDeny::Approve) => {
@@ -776,10 +795,14 @@ impl Into<String> for ToolResult {
     }
 }
 
-impl<T: Tool> ToolHolder for T {
+impl<T: Tool<Action>, Action> ToolHolder<Action> for T
+where
+    Action: Send + 'static,
+{
     fn call(
         &mut self,
         parameters: Value,
+        action: Actor<Action>,
     ) -> Pin<Box<dyn Future<Output = SystemResult<ToolResult>> + '_ + Send>> {
         event!(Level::DEBUG, "model used parameters {parameters}");
         Box::pin(async move {
@@ -796,18 +819,37 @@ impl<T: Tool> ToolHolder for T {
 
             let param = serde_json::from_value(param_value)?;
 
-            T::call(self, param).await.map(|r| r.into())
+            T::call(self, param, action).await.map(|r| r.into())
         })
     }
 }
 
-impl OllamaToolHolder for StatefulExtraToolHolder {
+impl<Action> OllamaToolHolder for StatefulExtraToolHolder<Action>
+where
+    Action: Send + 'static,
+{
     fn call(
         &mut self,
         parameters: serde_json::Value,
     ) -> std::pin::Pin<Box<dyn Future<Output = SystemResult<String>> + '_ + Send>> {
         Box::pin(async move {
-            match self.inner.write().await.call(parameters).await {
+            if let Some(prior) = self.info.retriever_tool_name
+                && !self
+                    .state
+                    .read()
+                    .await
+                    .checked
+                    .contains(&ToolcallKind::Extra(prior))
+            {
+                return Ok(format!("rejected: you must tool `{prior}` before this one").into());
+            }
+            match self
+                .inner
+                .write()
+                .await
+                .call(parameters, self.action.clone())
+                .await
+            {
                 Ok(res) => {
                     if !self.info.is_action {
                         if let ToolResult::Success(_) = res {

@@ -13,8 +13,9 @@ use crate::{
             dialog::{DialogMemory, debug::DebugDialogMemory},
         },
         optimize::{
-            self, ApproveOrDeny, ClarificationReqHandler, OptimizationCallback, Optimizer,
-            OptimizerAction, ScheduleParamterAccessor, llm::LlmOptimizer,
+            self, ApproveOrDeny, BasicOptimizerAction, ClarificationReqHandler,
+            OptimizationCallback, Optimizer, OptimizerAction, ScheduleParamterAccessor,
+            llm::LlmOptimizer,
         },
     },
     error::NaE,
@@ -113,13 +114,14 @@ async fn optimize_criteria() {
         .unwrap()
         .expect("early end of optimization");
     match action {
-        OptimizerAction::ContextPrefill(items) => {
+        OptimizerAction::Basic(BasicOptimizerAction::ContextPrefill(items)) => {
             assert!(!items.is_empty());
             approve.send(ApproveOrDeny::Approve).await.unwrap();
         }
-        OptimizerAction::Schedule(schedule_paramters) => {
+        OptimizerAction::Basic(BasicOptimizerAction::Schedule(schedule_paramters)) => {
             panic!("should not go schedule branch")
         }
+        OptimizerAction::Extra(()) => panic!("should not go other branch"),
     }
     assert!(optimization.accept().await.unwrap().is_none());
 }
