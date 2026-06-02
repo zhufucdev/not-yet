@@ -9,13 +9,10 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .create_table(
-                Table::create()
+            .alter_table(
+                Table::alter()
                     .table(MsgIdByDialogId::Table)
-                    .if_not_exists()
-                    .col(string(MsgIdByDialogId::DialogId).primary_key())
-                    .col(integer(MsgIdByDialogId::MsgId))
-                    .col(integer(MsgIdByDialogId::SubscriptionId))
+                    .add_column(ColumnDef::new(MsgIdByDialogId::ChatId).integer())
                     .to_owned(),
             )
             .await
@@ -23,7 +20,12 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(Table::drop().table(MsgIdByDialogId::Table).to_owned())
+            .alter_table(
+                Table::alter()
+                    .table(MsgIdByDialogId::Table)
+                    .drop_column(MsgIdByDialogId::ChatId)
+                    .to_owned(),
+            )
             .await
     }
 }

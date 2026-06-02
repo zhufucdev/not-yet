@@ -91,7 +91,7 @@ impl MigrationTrait for Migration {
         manager
             .get_connection()
             .execute_raw(Statement::from_string(
-                sea_orm::DatabaseBackend::Sqlite,
+                manager.get_database_backend(),
                 r#"INSERT INTO `subscription_` (id, cron, interval_mins, condition, user_id, kind, buffer_size) SELECT * FROM `subscription`;"#,
             ))
             .await?;

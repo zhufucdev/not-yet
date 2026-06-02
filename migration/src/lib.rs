@@ -9,7 +9,10 @@ mod m20260405_071428_add_bot_db_sub_buffer_size;
 mod m20260501_112246_add_criteria_mem_table;
 mod m20260501_134800_add_bot_db_msg_id_by_dialog_id;
 mod m20260531_104434_add_bot_channel;
+mod m20260602_055534_add_bot_dialog_chat_id;
+mod m20260602_064052_change_bot_msg_id_by_dialog_id_pk;
 
+pub(crate) mod id_msg_id_by_dialog_id;
 pub(crate) mod id_notify;
 pub(crate) mod id_subscription;
 pub(crate) mod id_user;
@@ -35,6 +38,10 @@ impl MigratorTrait for Migrator {
             Box::new(m20260501_134800_add_bot_db_msg_id_by_dialog_id::Migration),
             #[cfg(feature = "bot")]
             Box::new(m20260531_104434_add_bot_channel::Migration),
+            #[cfg(feature = "bot")]
+            Box::new(m20260602_055534_add_bot_dialog_chat_id::Migration),
+            #[cfg(feature = "bot")]
+            Box::new(m20260602_064052_change_bot_msg_id_by_dialog_id_pk::Migration),
         ]
     }
 }

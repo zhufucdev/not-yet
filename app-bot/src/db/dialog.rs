@@ -9,6 +9,7 @@ pub struct Model {
     pub dialog_id: String,
     pub msg_id: i32,
     pub subscription_id: i32,
+    pub chat_id: Option<i64>,
     #[sea_orm(belongs_to, from = "subscription_id", to = "id")]
     pub subscription: HasOne<subscription::Entity>,
 }

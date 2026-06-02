@@ -5,7 +5,7 @@ use ::futures::future;
 use anyhow::anyhow;
 use app_common::config::ParseConfigPath;
 use clap::Parser;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use lib_common::agent::decision::Decider;
 use lib_common::agent::error::GetTruthValueError;
@@ -27,11 +27,13 @@ use lib_common::{
 };
 use ollama_rs::generation::chat::ChatMessage;
 use sea_orm::{
-    ActiveEnum, ColumnTrait, DatabaseConnection, EntityTrait, Iterable, ModelTrait, QueryFilter,
+    ActiveEnum, ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, Iterable, ModelTrait,
+    QueryFilter,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::SmolStr;
-use teloxide::types::Recipient;
+use teloxide::sugar::request::RequestReplyExt;
+use teloxide::types::{ChatKind, MessageId, PublicChatKind, Recipient};
 use teloxide::utils::render::RenderMessageTextHelper;
 use teloxide::{
     dispatching::{
@@ -41,8 +43,8 @@ use teloxide::{
     payloads::SendMessageSetters,
     prelude::*,
 };
-use tokio::select;
 use tokio::sync::RwLock;
+use tokio::{pin, select};
 use tracing::{Instrument, Level, event, info_span};
 use tracing_subscriber::EnvFilter;
 
@@ -50,6 +52,7 @@ use crate::db::notify;
 use crate::telegram::optimize::TgOptimizerAction;
 use crate::telegram::optimize::renotify::SetReceipientTool;
 use crate::telegram::state::{LlmAssignment, OptimizationTask, StateFeedback};
+use crate::telegram::update_echo::{UpdateEcho, UpdateEchoHistory};
 use crate::{
     authenticator::{
         Access, Authenticator as _, priority::PriorityAuthenticator, sqlite::SqliteAuthenticator,
@@ -72,6 +75,7 @@ mod command;
 mod optimize;
 mod repmark;
 mod state;
+mod update_echo;
 
 type MasterDialog = Dialogue<State, InMemStorage<State>>;
 type Authenticator = PriorityAuthenticator<(
@@ -117,6 +121,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
             .collect::<Scheduler<SubscriptionId>>(),
     );
     let runner = OllamaRunner::default();
+    let echos = UpdateEchoHistory::default();
 
     future::select(
         Box::pin(
@@ -134,7 +139,8 @@ pub(super) async fn main() -> anyhow::Result<()> {
                         ),
                         SqliteAuthenticator::new(db.clone())
                     ))),
-                    scheduler.clone()
+                    scheduler.clone(),
+                    echos.clone()
                 ])
                 .enable_ctrlc_handler()
                 .build()
@@ -144,7 +150,7 @@ pub(super) async fn main() -> anyhow::Result<()> {
             async {
                 loop {
                     select! {
-                        result = start_polling_all(scheduler.clone(), &runner, &db, &data_path, &bot) => {
+                        result = start_polling_all(scheduler.clone(), &runner, &db, &data_path, &bot, &echos) => {
                             match result {
                                 Ok(_) => {
                                     event!(
@@ -225,7 +231,7 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
                     }]
                     .endpoint(receive_rss_custom_headers),
                 )
-                .endpoint(receive_feedback_msg),
+                .endpoint(receive_generic_msg),
         )
 }
 
@@ -235,6 +241,7 @@ async fn start_polling_all(
     db: &DatabaseConnection,
     working_dir: &Path,
     bot: &Bot,
+    echos: &UpdateEchoHistory,
 ) -> anyhow::Result<()> {
     let tasks = scheduler.schedules().await.into_iter().map(|schedule| {
         event!(Level::TRACE, "start polling all");
@@ -259,6 +266,7 @@ async fn start_polling_all(
                     let feed: RssFeed = rss.try_into()?;
                     send_update_messages(
                         &bot,
+                        &echos,
                         &feed,
                         feed.url(),
                         &sub,
@@ -276,6 +284,7 @@ async fn start_polling_all(
                     let feed: AtomFeed = atom.try_into()?;
                     send_update_messages(
                         &bot,
+                        &echos,
                         &feed,
                         feed.url(),
                         &sub,
@@ -298,6 +307,7 @@ async fn start_polling_all(
 
 async fn send_update_messages<Feed_>(
     bot: &Bot,
+    echos: &UpdateEchoHistory,
     feed: &Feed_,
     feed_url: &str,
     sub: &subscription::Model,
@@ -376,14 +386,22 @@ where
             let recipient: Recipient = dest
                 .map(|d| d.into())
                 .unwrap_or_else(|| UserId(sub.user_id as u64).into());
-            let tg_msg = bot.send_message(recipient, msg).await?;
-            db::dialog::ActiveModel::builder()
-                .set_dialog_id(&dialog_id)
+            let echo = UpdateEcho {
+                msg: msg.clone(),
+                dialog_id: dialog_id.clone(),
+                sub_id: sub.id,
+                recipient: recipient.clone(),
+            };
+            let tg_msg = bot.send_message(recipient.clone(), msg).await?;
+            echo.as_active_model()
                 .set_msg_id(tg_msg.id.0)
-                .set_subscription_id(sub.id)
+                .set_chat_id(tg_msg.chat.id.0)
                 .insert(db)
                 .await
                 .inspect_err(|err| event!(Level::WARN, "failed to save dialog: {err}"))?;
+            if matches!(recipient, Recipient::ChannelUsername(_)) {
+                echos.write().await.push(echo);
+            }
             Ok(())
         }
         .instrument(info_span!("send_message", dialog_id = dialog_id))
@@ -779,8 +797,9 @@ async fn receive_rss_custom_headers(
     Ok(())
 }
 
-async fn receive_feedback_msg(
+async fn receive_generic_msg(
     bot: Bot,
+    echos: UpdateEchoHistory,
     msg: Message,
     db: DatabaseConnection,
     runner: OllamaRunner,
@@ -788,9 +807,22 @@ async fn receive_feedback_msg(
     working_dir: PathBuf,
     authenticator: Arc<Authenticator>,
 ) -> anyhow::Result<()> {
+    if let Some(echo) = echos.pop_similar(&msg).await {
+        event!(Level::DEBUG, "received a self message from public chat");
+        echo.as_active_model()
+            .set_chat_id(msg.chat.id.0)
+            .set_msg_id(msg.id.0)
+            .insert(&db)
+            .await?;
+        return Ok(());
+    }
+
     let Some(sender) = &msg.from else {
         return Ok(());
     };
+    if sender.is_bot || sender.is_telegram() || sender.is_channel() || sender.is_anonymous() {
+        return Ok(());
+    }
     if !matches!(
         authenticator.get_access(&(sender.id.0 as UserId)).await?,
         Access::Granted(_)
@@ -868,11 +900,23 @@ async fn receive_feedback_msg(
         event!(Level::TRACE, "state = start");
         if let Some(reply) = msg.reply_to_message() {
             let Some((model, Some(sub))) = db::dialog::Entity::find()
-                .filter(db::dialog::Column::MsgId.eq(reply.id.0))
+                .filter(
+                    db::dialog::Column::MsgId.eq(reply.id.0).and(
+                        db::dialog::Column::ChatId
+                            .eq(reply.chat.id.0)
+                            .or(db::dialog::Column::ChatId.is_null()),
+                    ),
+                )
                 .find_also_related(db::subscription::Entity)
                 .one(&db)
                 .await?
             else {
+                event!(
+                    Level::TRACE,
+                    "no dialog found, reply.id = {}, reply.chat.id = {}",
+                    reply.id,
+                    reply.chat.id
+                );
                 bot.send_message(
                     msg.chat_id().unwrap(),
                     "There's nothing I can do with that message. Sorry!",
@@ -901,7 +945,13 @@ async fn receive_feedback_msg(
                         tasks: Default::default(),
                     })
                     .await?;
-                tokio::spawn(handle_optimization(optimization, bot, chat_id, dialog));
+                tokio::spawn(handle_optimization(
+                    optimization,
+                    bot,
+                    chat_id,
+                    msg.id,
+                    dialog,
+                ));
             } else {
                 bot.send_message(chat_id, "I don't know how to help with that, cause I forgot about the conversation. Sorry!").await?;
             }
@@ -999,6 +1049,7 @@ async fn handle_optimization<Error>(
     mut optimization: OptimizationCallback<Error, TgOptimizerAction>,
     bot: Bot,
     chat_id: ChatId,
+    reply_to: impl Into<MessageId> + Clone,
     dialog: MasterDialog,
 ) -> anyhow::Result<()>
 where
@@ -1038,6 +1089,7 @@ where
             ("Approve", "y"),
             ("Deny", "n"),
         ]]))
+        .reply_to(reply_to.clone())
         .await?;
         dialog
             .update(
@@ -1058,14 +1110,13 @@ where
             chat_id,
             "No actions were taken. Thank you for cooperation, and feel free to retry next time!",
         )
-        .await?;
     } else {
         bot.send_message(
             chat_id,
             "I have finished my job. If there's anything more, feel free to ask!",
         )
-        .await?;
     }
+    .await?;
     dialog.update(State::Start).await?;
     event!(Level::DEBUG, "reset dialog after multi-turn LLM");
     Ok(())
