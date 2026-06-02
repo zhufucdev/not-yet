@@ -27,7 +27,7 @@ impl MigrationTrait for Migration {
                     .col(string(MsgIdByDialogId::DialogId).not_null())
                     .col(integer(MsgIdByDialogId::MsgId).not_null())
                     .col(integer(MsgIdByDialogId::SubscriptionId).not_null())
-                    .col(integer(MsgIdByDialogId::ChatId))
+                    .col(integer(MsgIdByDialogId::ChatId).null())
                     .primary_key(
                         Index::create()
                             .col(MsgIdByDialogId::DialogId)
