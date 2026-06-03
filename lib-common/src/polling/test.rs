@@ -507,7 +507,7 @@ async fn run_now_notifies_next_reschedule() {
 async fn start_polling_emits_several_updates_with_correct_state_transitions() {
     const EMISSIONS: usize = 5;
     // Generous outer timeout: 5 fires × 1 s/fire + 2 s headroom.
-    const OUTER_TIMEOUT: Duration = Duration::from_secs(7);
+    const OUTER_TIMEOUT: Duration = Duration::from_secs(EMISSIONS as u64 + 2);
     // Each individual poll may block up to one full cron period plus slack.
     const PER_POLL_TIMEOUT: Duration = Duration::from_millis(1_500);
 

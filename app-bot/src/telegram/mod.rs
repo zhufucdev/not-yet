@@ -356,7 +356,9 @@ where
                     event!(Level::WARN, "will clear decision memory");
                     decision_mem.clear().await?;
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => {
+                    event!(Level::ERROR, "decider error: {err}");
+                }
             }
 
             let msg = match feed.get_metadata().await {

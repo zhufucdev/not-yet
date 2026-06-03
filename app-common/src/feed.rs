@@ -1,13 +1,13 @@
 use std::fmt::Display;
 
 use anyhow::anyhow;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use tracing::{Level, event};
 
 use lib_common::{
-    polling::{KeyContract, Scheduler, task::Task},
+    polling::{KeyContract, Scheduler, error::TaskCancellationError, task::Task},
     source::Feed,
-    update::{UpdatePersistence, UpdateWakerExt},
+    update::{self, UpdatePersistence, UpdateWakerExt},
 };
 
 /// Generate an infinite stream (unless `key` was not present in `scheduler`)
