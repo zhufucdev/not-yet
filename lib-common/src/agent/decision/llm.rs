@@ -331,6 +331,8 @@ struct FetchUrlParams {
     no_sanitize: Option<bool>,
     /// Cap the number of characters returned, defaults to 5k
     limit: Option<usize>,
+    /// Skip the first n characters, defaults to 0
+    offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, JsonSchema, Deserialize)]
@@ -455,7 +457,10 @@ impl Tool for FetchUrl {
                             ),
                         )?;
                         let content = md.content.unwrap();
-                        Ok(content[0..content.len().min(parameters.limit.unwrap_or(5_000))].into())
+                        let skip = parameters.offset.unwrap_or(0);
+                        let range =
+                            skip..skip + content.len().min(parameters.limit.unwrap_or(5_000));
+                        Ok(content[range].into())
                     }
                     (_, None | Some(false)) => Ok(format!("unsupported: {content_type}").into()),
                     (_, Some(true)) => Ok(res.text_with_charset("utf-8").await?.into()),
