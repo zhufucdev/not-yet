@@ -3054,7 +3054,7 @@ dependencies = [
 [[package]]
 name = "ollama-rs"
 version = "0.3.4"
-source = "git+https://github.com/zhufucdev/ollama-rs.git?rev=b4781b4#b4781b42ad66a9a82bc9c71c93a37e260ffa4dfa"
+source = "git+https://github.com/zhufucdev/ollama-rs.git?rev=45de03b#45de03b23a194842f0943726ebccbd7bbb41166e"
 dependencies = [
  "async-stream",
  "log",
@@ -3071,7 +3071,7 @@ dependencies = [
 [[package]]
 name = "ollama-rs-macros"
 version = "0.3.4"
-source = "git+https://github.com/zhufucdev/ollama-rs.git?rev=b4781b4#b4781b42ad66a9a82bc9c71c93a37e260ffa4dfa"
+source = "git+https://github.com/zhufucdev/ollama-rs.git?rev=45de03b#45de03b23a194842f0943726ebccbd7bbb41166e"
 dependencies = [
  "proc-macro2",
  "quote",

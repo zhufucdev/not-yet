@@ -20,7 +20,7 @@ use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
 use html_to_markdown_rs::{ConversionOptions, LinkStyle, OutputFormat};
 use ollama_rs::{
-    error::OllamaError,
+    error::{OllamaError, ToolCallError},
     generation::{
         chat::{ChatMessage, MessageRole},
         parameters::ThinkType,
@@ -284,6 +284,10 @@ where
                             )));
                         }
                     },
+
+                    Err(OllamaError::ToolCallError(ToolCallError::InvalidToolArguments(err))) => {
+                        request_msgs = vec![ChatMessage::tool(format!("invalid arguments: {err}"))];
+                    }
                     Err(err) => return Err(GetTruthValueError::Runner(err)),
                 }
             }

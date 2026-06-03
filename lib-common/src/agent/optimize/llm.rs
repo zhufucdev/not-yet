@@ -6,7 +6,7 @@ use std::{
 };
 
 use ollama_rs::{
-    error::OllamaError,
+    error::{OllamaError, ToolCallError},
     generation::{
         chat::{ChatMessage, MessageRole},
         parameters::ThinkType,
@@ -31,7 +31,9 @@ use crate::{
     agent::{
         memory::{criteria::CriteriaMemory, dialog::DialogMemory},
         optimize::{
-            Actor, ApproveOrDeny, BasicOptimizerAction, ClarificationReqHandler, OptimizationCallback, Optimizer, OptimizerAction, ScheduleParamterAccessor, ScheduleParamters
+            Actor, ApproveOrDeny, BasicOptimizerAction, ClarificationReqHandler,
+            OptimizationCallback, Optimizer, OptimizerAction, ScheduleParamterAccessor,
+            ScheduleParamters,
         },
         template,
     },
@@ -831,7 +833,7 @@ where
     fn call(
         &mut self,
         parameters: serde_json::Value,
-    ) -> std::pin::Pin<Box<dyn Future<Output = SystemResult<String>> + '_ + Send>> {
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, ToolCallError>> + '_ + Send>> {
         Box::pin(async move {
             if let Some(prior) = self.info.retriever_tool_name
                 && !self
@@ -872,7 +874,7 @@ where
                     }
                     Ok(res.into())
                 }
-                Err(err) => Err(err),
+                Err(err) => Err(ToolCallError::InternalToolError(err)),
             }
         })
     }
