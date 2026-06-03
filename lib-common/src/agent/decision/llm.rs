@@ -454,7 +454,8 @@ impl Tool for FetchUrl {
                                     .build(),
                             ),
                         )?;
-                        Ok(md.content.unwrap()[0..parameters.limit.unwrap_or(5_000)].into())
+                        let content = md.content.unwrap();
+                        Ok(content[0..content.len().min(parameters.limit.unwrap_or(5_000))].into())
                     }
                     (_, None | Some(false)) => Ok(format!("unsupported: {content_type}").into()),
                     (_, Some(true)) => Ok(res.text_with_charset("utf-8").await?.into()),
