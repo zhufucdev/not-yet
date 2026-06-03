@@ -460,8 +460,9 @@ impl Tool for FetchUrl {
                         )?;
                         let content = md.content.unwrap();
                         let skip = parameters.offset.unwrap_or(0);
-                        let range =
-                            skip..skip + content.len().min(parameters.limit.unwrap_or(5_000));
+                        let range = skip.min(content.len())
+                            ..(skip + content.len().min(parameters.limit.unwrap_or(5_000)))
+                                .min(content.len());
                         Ok(content[range].into())
                     }
                     (_, None | Some(false)) => Ok(format!("unsupported: {content_type}").into()),
