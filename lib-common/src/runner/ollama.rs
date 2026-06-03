@@ -35,7 +35,7 @@ impl Default for OllamaRunner {
             .unwrap_or(Url::parse("http://localhost:11434").unwrap());
         Self {
             ollama: Arc::new(Ollama::from_url(url)),
-            model_name: "gemma4:e4b".into(),
+            model_name: "qwen3.5:9b".into(),
         }
     }
 }
