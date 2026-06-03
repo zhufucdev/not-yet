@@ -319,7 +319,7 @@ struct GetPreviousDecisionsParams {
     offset: Option<usize>,
     /// Cap the number of items returned, defaults to 3.
     limit: Option<usize>,
-    /// Return matching items only.
+    /// Return matching items only. Choose either `truthy` or `falsy`.
     filter: Option<DecisionFilter>,
 }
 
@@ -338,8 +338,10 @@ struct FetchUrlParams {
 #[derive(Debug, Clone, Copy, JsonSchema, Deserialize)]
 enum DecisionFilter {
     /// You said yes.
+    #[serde(rename = "truthy")]
     Truthy,
     /// You said no.
+    #[serde(rename = "falsy")]
     Falsy,
 }
 
