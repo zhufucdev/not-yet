@@ -330,7 +330,9 @@ where
         SqliteUpdatePersistence::new(db.clone(), sub_id)?,
         sub.buffer_size as usize,
     )
-    .try_for_each(async |(item, _)| {
+    .inspect_err(|e| event!(Level::WARN, "check feed error: {e}"))
+    .filter_map(|r| future::ready(r.ok()))
+    .then(async |(item, _)| -> anyhow::Result<()> {
         let Some(item) = item else {
             return Ok(());
         };
@@ -409,6 +411,7 @@ where
         .instrument(info_span!("send_message", dialog_id = dialog_id))
         .await
     })
+    .try_for_each(|_| future::ready(Ok(())))
     .await?;
     event!(
         Level::WARN,
