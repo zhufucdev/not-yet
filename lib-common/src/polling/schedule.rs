@@ -241,7 +241,7 @@ impl<K: KeyContract> Scheduler<K> {
         self.schedules.read().await.to_vec()
     }
 
-    pub async fn until_next_reschedule(&self) -> Result<QueueType, RecvError> {
+    pub async fn until_next_reschedule(&self) -> Result<(QueueType, K), RecvError> {
         let mut rx = self.schedules_notify.0.subscribe();
 
         async {
@@ -249,7 +249,7 @@ impl<K: KeyContract> Scheduler<K> {
                 match rx.recv().await {
                     Ok((t, s)) => {
                         event!(Level::TRACE, "received {t:?} from {s:?}");
-                        return Ok(t);
+                        return Ok((t, s.key().clone()));
                     }
                     Err(RecvError::Lagged(n)) => {
                         event!(Level::TRACE, "lagged {n}, ignorning");

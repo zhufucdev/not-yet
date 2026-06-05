@@ -176,7 +176,10 @@ async fn until_next_reschedule_resolves_after_add_schedule() {
         tokio::join!(notify_fut, s.add_schedule(every_second(), TestKey(1)));
 
     // First insertion creates a new queue.
-    assert!(matches!(queue_type_result, Ok(QueueType::New)));
+    assert!(matches!(
+        queue_type_result,
+        Ok((QueueType::New, TestKey(1)))
+    ));
 }
 
 #[tokio::test]
@@ -196,7 +199,10 @@ async fn until_next_reschedule_second_insertion_reports_existing_queue() {
     let (queue_type_result, _) =
         tokio::join!(notify_fut, s.add_schedule(every_second(), TestKey(1)));
 
-    assert!(matches!(queue_type_result, Ok(QueueType::Exising)));
+    assert!(matches!(
+        queue_type_result,
+        Ok((QueueType::Exising, TestKey(1)))
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -453,7 +459,7 @@ async fn run_now_notifies_next_reschedule() {
             read_tx.send(()).await.unwrap();
             let mut has_new_queue = false;
             while s_detached.schedules().await.len() < 2 {
-                if s_detached.until_next_reschedule().await.unwrap() == QueueType::New {
+                if s_detached.until_next_reschedule().await.unwrap().0 == QueueType::New {
                     has_new_queue = true;
                 }
             }

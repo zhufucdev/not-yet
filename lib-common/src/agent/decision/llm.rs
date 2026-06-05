@@ -28,14 +28,13 @@ use ollama_rs::{
     },
     history::ChatHistory,
 };
-use rand::distr::uniform::SampleRange;
 use reqwest::Url;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use smol_str::ToSmolStr;
 use thiserror::Error;
 use tokio::{pin, sync::RwLock};
-use tracing::{Instrument, Level, debug_span, event, info_span};
+use tracing::{Instrument, Level, debug_span, event, info_span, span};
 
 pub struct LlmConditionMatcher<Runner, DecisionMemory, DialogMemory, Criteria> {
     runner: Runner,
@@ -419,73 +418,90 @@ impl Tool for FetchUrl {
     }
 
     async fn call(&mut self, parameters: Self::Params) -> SystemResult<String> {
-        let url = match Url::parse(&parameters.url) {
-            Ok(r) => r,
-            Err(err) => {
-                return SystemResult::Ok(ToolResult::Failure(err.to_string()).into());
-            }
-        };
-        let content = match (
-            self.0
-                .get(url)
-                .send()
-                .await
-                .map(|res| res.error_for_status())
-                .flatten(),
-            parameters.no_sanitize,
-        ) {
-            (Ok(res), Some(false) | None) => {
-                let Ok(content_type) = res.headers()[reqwest::header::CONTENT_TYPE].to_str() else {
-                    return Err(format!("this resource has no known content type, and you may retry with the `no_santize` flag to ignore").into());
-                };
+        async move {
+            event!(
+                Level::DEBUG,
+                "parameters: {parameters:?}"
+            );
+            let url = match Url::parse(&parameters.url) {
+                Ok(r) => r,
+                Err(err) => {
+                    return SystemResult::Ok(ToolResult::Failure(err.to_string()).into());
+                }
+            };
+            let content = match (
+                self.0
+                    .get(url)
+                    .send()
+                    .await
+                    .map(|res| res.error_for_status())
+                    .flatten(),
+                parameters.no_sanitize,
+            ) {
+                (Ok(res), Some(false) | None) => {
+                    let Some(content_type) = res
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|h| h.to_str().ok())
+                    else {
+                        return Err(format!("this resource has no known content type, and you may retry with the `no_santize` flag to ignore").into());
+                    };
+                    event!(Level::DEBUG, "content type: {content_type}");
 
-                if !content_type.starts_with("text/") {
-                    return Err(format!("expect a text content type, got {content_type:?}").into());
-                }
-                let Some(text_type) = content_type
-                    .split('/')
-                    .skip(1)
-                    .next()
-                    .and_then(|rem| rem.split(';').next())
-                    .map(|t| t.trim())
-                else {
-                    return Err(format!("unknown content type: {content_type}").into());
-                };
-                match text_type {
-                    "plain" => Ok(res.text_with_charset("utf-8").await?.into()),
-                    "html" | "xml" => {
-                        let md = html_to_markdown_rs::convert(
-                            res.text_with_charset("utf-8").await?.as_str(),
-                            Some(
-                                ConversionOptions::builder()
-                                    .capture_svg(false)
-                                    .output_format(OutputFormat::Markdown)
-                                    .link_style(LinkStyle::Reference)
-                                    .build(),
-                            ),
-                        )?;
-                        Ok(md.content.unwrap())
+                    if !content_type.starts_with("text/") {
+                        return Err(
+                            format!("expect a text content type, got {content_type:?}").into()
+                        );
                     }
-                    _ => Err(format!("unsupported: {content_type}").into()),
+                    let Some(text_type) = content_type
+                        .split('/')
+                        .skip(1)
+                        .next()
+                        .and_then(|rem| rem.split(';').next())
+                        .map(|t| t.trim())
+                    else {
+                        return Err(format!("unknown content type: {content_type}").into());
+                    };
+                    match text_type {
+                        "plain" => Ok(res.text_with_charset("utf-8").await?.into()),
+                        "html" | "xml" => {
+                            let md = html_to_markdown_rs::convert(
+                                res.text_with_charset("utf-8").await?.as_str(),
+                                Some(
+                                    ConversionOptions::builder()
+                                        .capture_svg(false)
+                                        .output_format(OutputFormat::Markdown)
+                                        .link_style(LinkStyle::Reference)
+                                        .build(),
+                                ),
+                            )?;
+                            Ok(md.content.unwrap())
+                        }
+                        _ => Err(format!("unsupported: {content_type}").into()),
+                    }
                 }
+                (Ok(res), Some(true)) => res
+                    .text_with_charset("utf-8")
+                    .await
+                    .map_err(|err| format!("could not decode as text: {err}"))
+                    .into(),
+                (Err(err), _) => {
+                    event!(Level::WARN, "HTTP request failed: {err}");
+                    Err(format!("HTTP reqest failed: {err}").into())
+                },
+            };
+            match content {
+                Ok(content) => {
+                    let skip = parameters.offset.unwrap_or(0);
+                    let limit = parameters.limit.unwrap_or(5_000);
+                    let content: String = content.chars().skip(skip).take(limit).collect();
+                    Ok(content)
+                }
+                Err(err) => Ok(ToolResult::Failure(err).into()),
             }
-            (Ok(res), Some(true)) => res
-                .text_with_charset("utf-8")
-                .await
-                .map_err(|err| format!("could not decode as text: {err}"))
-                .into(),
-            (Err(err), _) => Err(format!("HTTP reqest failed: {err}").into()),
-        };
-        match content {
-            Ok(content) => {
-                let skip = parameters.offset.unwrap_or(0);
-                let range = skip.min(content.len())
-                    ..(skip + content.len().min(parameters.limit.unwrap_or(5_000)))
-                        .min(content.len());
-                Ok(content[range].into())
-            }
-            Err(err) => Ok(ToolResult::Failure(err).into()),
         }
+        .instrument(info_span!("fetch_url"))
+        .await
     }
 }
 

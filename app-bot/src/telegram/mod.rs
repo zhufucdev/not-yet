@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::path::PathBuf;
 use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
 
@@ -5,7 +6,7 @@ use ::futures::future;
 use anyhow::anyhow;
 use app_common::config::ParseConfigPath;
 use clap::Parser;
-use futures::{StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use lib_common::agent::decision::Decider;
 use lib_common::agent::error::GetTruthValueError;
@@ -149,26 +150,10 @@ pub(super) async fn main() -> anyhow::Result<()> {
         Box::pin(
             async {
                 loop {
-                    select! {
-                        result = start_polling_all(scheduler.clone(), &runner, &db, &data_path, &bot, &echos) => {
-                            match result {
-                                Ok(_) => {
-                                    event!(
-                                        Level::WARN,
-                                        "empty schedule queue, waiting 30s before retrying"
-                                    );
-                                    tokio::time::sleep(Duration::from_secs(30)).await;
-                                },
-                                Err(err) => {
-                                    event!(Level::ERROR, "while polling: {err}");
-                                    event!(Level::DEBUG, "{err:#?}");
-                                },
-                            }
-                        },
-                        Some(()) = async { loop { if let Ok(QueueType::New) = scheduler.until_next_reschedule().await { return Some(()) }; } } => {
-                            event!(Level::DEBUG, "reschedule triggered");
-                        },
-                    }
+                    poll_all(&scheduler, &runner, &db, &data_path, &bot, &echos).await;
+                    event!(Level::WARN, "poll_all ended prematurely");
+                    event!(Level::INFO, "sleep for 10s before retrying");
+                    tokio::time::sleep(Duration::from_secs(10)).await;
                 }
             }
             .instrument(info_span!("task_loop")),
@@ -235,74 +220,122 @@ fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
         )
 }
 
-async fn start_polling_all(
-    scheduler: Arc<Scheduler<SubscriptionId>>,
+async fn run_polling_task(
+    sub_id: i32,
+    scheduler: &Scheduler<SubscriptionId>,
     runner: &OllamaRunner,
     db: &DatabaseConnection,
     working_dir: &Path,
     bot: &Bot,
     echos: &UpdateEchoHistory,
-) -> anyhow::Result<()> {
-    let tasks = scheduler.schedules().await.into_iter().map(|schedule| {
-        event!(Level::TRACE, "start polling all");
-        let scheduler = scheduler.clone();
-        let sub_id = *schedule.key();
-        async move {
-            let Some(sub) = subscription::Entity::find_by_id(sub_id).one(db).await? else {
-                event!(Level::ERROR, "failed to find subscription from id");
-                return Ok(());
+) -> Result<(), anyhow::Error> {
+    let Some(sub) = subscription::Entity::find_by_id(sub_id).one(db).await? else {
+        event!(Level::ERROR, "failed to find subscription from id");
+        return Ok(());
+    };
+    let (rss, atom) = future::try_join(
+        sub.find_related(rss::Entity).one(db),
+        sub.find_related(atom::Entity).one(db),
+    )
+    .await?;
+
+    match sub.kind {
+        subscription::Kind::Rss => {
+            let Some(rss) = rss else {
+                return Err(anyhow!("RSS subscription has no associated feed"));
             };
-            let (rss, atom) = future::try_join(
-                sub.find_related(rss::Entity).one(db),
-                sub.find_related(atom::Entity).one(db),
+            let feed: RssFeed = rss.try_into()?;
+            send_update_messages(
+                &bot,
+                &echos,
+                &feed,
+                feed.url(),
+                &sub,
+                &runner,
+                &scheduler,
+                db,
+                working_dir,
             )
             .await?;
-
-            match sub.kind {
-                subscription::Kind::Rss => {
-                    let Some(rss) = rss else {
-                        return Err(anyhow!("RSS subscription has no associated feed"));
-                    };
-                    let feed: RssFeed = rss.try_into()?;
-                    send_update_messages(
-                        &bot,
-                        &echos,
-                        &feed,
-                        feed.url(),
-                        &sub,
-                        &runner,
-                        &scheduler,
-                        db,
-                        working_dir,
-                    )
-                    .await?;
-                }
-                subscription::Kind::Atom => {
-                    let Some(atom) = atom else {
-                        return Err(anyhow!("Atom subscription has no associated feed"));
-                    };
-                    let feed: AtomFeed = atom.try_into()?;
-                    send_update_messages(
-                        &bot,
-                        &echos,
-                        &feed,
-                        feed.url(),
-                        &sub,
-                        &runner,
-                        &scheduler,
-                        db,
-                        working_dir,
-                    )
-                    .await?;
-                }
-            }
-
-            Ok(())
         }
-        .instrument(info_span!("run_task", subscription_id = sub_id))
-    });
-    future::try_join_all(tasks).await?;
+        subscription::Kind::Atom => {
+            let Some(atom) = atom else {
+                return Err(anyhow!("Atom subscription has no associated feed"));
+            };
+            let feed: AtomFeed = atom.try_into()?;
+            send_update_messages(
+                &bot,
+                &echos,
+                &feed,
+                feed.url(),
+                &sub,
+                &runner,
+                &scheduler,
+                db,
+                working_dir,
+            )
+            .await?;
+        }
+    }
+
     Ok(())
+}
+
+async fn poll_all(
+    scheduler: &Scheduler<SubscriptionId>,
+    runner: &OllamaRunner,
+    db: &DatabaseConnection,
+    working_dir: &Path,
+    bot: &Bot,
+    echos: &UpdateEchoHistory,
+) {
+    let tasks = scheduler.schedules().await.into_iter().map(|schedule| {
+        event!(Level::TRACE, "start polling all");
+        let sub_id = *schedule.key();
+        async move {
+            let mut error_count = 0;
+            while error_count < 10 {
+                // This is safe because outside has not access to the internal mutables, making
+                // observations of invariants impossible
+                match std::panic::AssertUnwindSafe(run_polling_task(
+                    sub_id,
+                    scheduler,
+                    runner,
+                    db,
+                    working_dir,
+                    bot,
+                    echos,
+                ))
+                .catch_unwind()
+                .await
+                {
+                    Ok(Err(err)) => {
+                        event!(Level::ERROR, "{err}");
+                        error_count += 1;
+                    }
+                    Ok(Ok(())) => {
+                        event!(Level::WARN, "polling task ended prematurely");
+                    }
+                    Err(info) => {
+                        let msg: &str = if let Some(msg) = info.downcast_ref::<String>() {
+                            msg
+                        } else if let Some(msg) = info.downcast_ref::<&'static str>() {
+                            msg
+                        } else {
+                            "unknown"
+                        };
+                        event!(Level::ERROR, "polling task panicked: {msg}");
+                        error_count += 1;
+                    }
+                }
+                event!(Level::INFO, "sleep for 10s before retrying");
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+            event!(Level::WARN, "too many errors, ending this task");
+        }
+        .instrument(info_span!("polling_task", sub_id = sub_id))
+    });
+    future::join_all(tasks).await;
 }
 
 async fn send_update_messages<Feed_>(
