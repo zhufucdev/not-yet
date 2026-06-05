@@ -339,20 +339,32 @@ struct FetchUrlParams {
 }
 
 #[derive(Debug, Clone, Copy, JsonSchema, Deserialize)]
-enum DecisionFilter {
+struct DecisionFilter {
     /// You said yes.
-    #[serde(rename = "truthy")]
-    Truthy,
+    truthy: Option<bool>,
     /// You said no.
-    #[serde(rename = "falsy")]
-    Falsy,
+    falsy: Option<bool>,
 }
 
 impl DecisionFilter {
     pub fn matches<M: LlmComprehendable>(&self, decision: &Decision<M>) -> bool {
         match self {
-            DecisionFilter::Truthy => decision.is_truthy,
-            DecisionFilter::Falsy => !decision.is_truthy,
+            DecisionFilter {
+                truthy: Some(true),
+                falsy: Some(false) | None,
+            } => decision.is_truthy,
+            DecisionFilter {
+                truthy: Some(false) | None,
+                falsy: Some(true),
+            } => !decision.is_truthy,
+            DecisionFilter {
+                truthy: Some(false) | None,
+                falsy: Some(false) | None,
+            } => false,
+            DecisionFilter {
+                truthy: Some(true),
+                falsy: Some(true),
+            } => true,
         }
     }
 }
