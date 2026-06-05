@@ -425,20 +425,22 @@ impl Tool for FetchUrl {
                 return SystemResult::Ok(ToolResult::Failure(err.to_string()).into());
             }
         };
-        match self
-            .0
-            .get(url)
-            .send()
-            .await
-            .map(|res| res.error_for_status())
-            .flatten()
-        {
-            Ok(res) => {
-                let content_type = res.headers()[reqwest::header::CONTENT_TYPE]
-                    .to_str()
-                    .unwrap();
+        let content = match (
+            self.0
+                .get(url)
+                .send()
+                .await
+                .map(|res| res.error_for_status())
+                .flatten(),
+            parameters.no_sanitize,
+        ) {
+            (Ok(res), Some(false) | None) => {
+                let Ok(content_type) = res.headers()[reqwest::header::CONTENT_TYPE].to_str() else {
+                    return Err(format!("this resource has no known content type, and you may retry with the `no_santize` flag to ignore").into());
+                };
+
                 if !content_type.starts_with("text/") {
-                    return Ok(format!("expect a text content type, got {content_type:?}").into());
+                    return Err(format!("expect a text content type, got {content_type:?}").into());
                 }
                 let Some(text_type) = content_type
                     .split('/')
@@ -447,11 +449,11 @@ impl Tool for FetchUrl {
                     .and_then(|rem| rem.split(';').next())
                     .map(|t| t.trim())
                 else {
-                    return Ok(format!("unknown content type: {content_type}").into());
+                    return Err(format!("unknown content type: {content_type}").into());
                 };
-                match (text_type, parameters.no_sanitize) {
-                    ("plain", _) => Ok(res.text_with_charset("utf-8").await?.into()),
-                    ("html" | "xml", _) => {
+                match text_type {
+                    "plain" => Ok(res.text_with_charset("utf-8").await?.into()),
+                    "html" | "xml" => {
                         let md = html_to_markdown_rs::convert(
                             res.text_with_charset("utf-8").await?.as_str(),
                             Some(
@@ -462,18 +464,27 @@ impl Tool for FetchUrl {
                                     .build(),
                             ),
                         )?;
-                        let content = md.content.unwrap();
-                        let skip = parameters.offset.unwrap_or(0);
-                        let range = skip.min(content.len())
-                            ..(skip + content.len().min(parameters.limit.unwrap_or(5_000)))
-                                .min(content.len());
-                        Ok(content[range].into())
+                        Ok(md.content.unwrap())
                     }
-                    (_, None | Some(false)) => Ok(format!("unsupported: {content_type}").into()),
-                    (_, Some(true)) => Ok(res.text_with_charset("utf-8").await?.into()),
+                    _ => Err(format!("unsupported: {content_type}").into()),
                 }
             }
-            Err(err) => Ok(format!("HTTP reqest failed: {err}").into()),
+            (Ok(res), Some(true)) => res
+                .text_with_charset("utf-8")
+                .await
+                .map_err(|err| format!("could not decode as text: {err}"))
+                .into(),
+            (Err(err), _) => Err(format!("HTTP reqest failed: {err}").into()),
+        };
+        match content {
+            Ok(content) => {
+                let skip = parameters.offset.unwrap_or(0);
+                let range = skip.min(content.len())
+                    ..(skip + content.len().min(parameters.limit.unwrap_or(5_000)))
+                        .min(content.len());
+                Ok(content[range].into())
+            }
+            Err(err) => Ok(ToolResult::Failure(err).into()),
         }
     }
 }
