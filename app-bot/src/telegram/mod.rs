@@ -1,5 +1,5 @@
-use std::fmt::Debug;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
 
 use ::futures::future;
@@ -150,7 +150,15 @@ pub(super) async fn main() -> anyhow::Result<()> {
         Box::pin(
             async {
                 loop {
-                    poll_all(&scheduler, &runner, &db, &data_path, &bot, &echos).await;
+                    poll_all(
+                        scheduler.clone(),
+                        runner.clone(),
+                        db.clone(),
+                        data_path.clone(),
+                        bot.clone(),
+                        echos.clone(),
+                    )
+                    .await;
                     event!(Level::WARN, "poll_all ended prematurely");
                     event!(Level::INFO, "sleep for 10s before retrying");
                     tokio::time::sleep(Duration::from_secs(10)).await;
@@ -281,7 +289,8 @@ async fn run_polling_task(
     Ok(())
 }
 
-async fn poll_all(
+async fn poll_one(
+    sub_id: i32,
     scheduler: &Scheduler<SubscriptionId>,
     runner: &OllamaRunner,
     db: &DatabaseConnection,
@@ -289,53 +298,118 @@ async fn poll_all(
     bot: &Bot,
     echos: &UpdateEchoHistory,
 ) {
-    let tasks = scheduler.schedules().await.into_iter().map(|schedule| {
-        event!(Level::TRACE, "start polling all");
-        let sub_id = *schedule.key();
-        async move {
-            let mut error_count = 0;
-            while error_count < 10 {
-                // This is safe because outside has not access to the internal mutables, making
-                // observations of invariants impossible
-                match std::panic::AssertUnwindSafe(run_polling_task(
-                    sub_id,
-                    scheduler,
-                    runner,
-                    db,
-                    working_dir,
-                    bot,
-                    echos,
-                ))
-                .catch_unwind()
-                .await
-                {
-                    Ok(Err(err)) => {
-                        event!(Level::ERROR, "{err}");
-                        error_count += 1;
-                    }
-                    Ok(Ok(())) => {
-                        event!(Level::WARN, "polling task ended prematurely");
-                    }
-                    Err(info) => {
-                        let msg: &str = if let Some(msg) = info.downcast_ref::<String>() {
-                            msg
-                        } else if let Some(msg) = info.downcast_ref::<&'static str>() {
-                            msg
-                        } else {
-                            "unknown"
-                        };
-                        event!(Level::ERROR, "polling task panicked: {msg}");
-                        error_count += 1;
-                    }
-                }
-                event!(Level::INFO, "sleep for 10s before retrying");
-                tokio::time::sleep(Duration::from_secs(10)).await;
+    let mut error_count = 0;
+    while error_count < 10 {
+        // This is safe because outside has not access to the internal mutables, making
+        // observations of invariants impossible
+        match std::panic::AssertUnwindSafe(run_polling_task(
+            sub_id,
+            scheduler,
+            runner,
+            db,
+            working_dir,
+            bot,
+            echos,
+        ))
+        .catch_unwind()
+        .await
+        {
+            Ok(Err(err)) => {
+                event!(Level::ERROR, "{err}");
+                error_count += 1;
             }
-            event!(Level::WARN, "too many errors, ending this task");
+            Ok(Ok(())) => {
+                event!(Level::WARN, "polling task ended prematurely");
+            }
+            Err(info) => {
+                let msg: &str = if let Some(msg) = info.downcast_ref::<String>() {
+                    msg
+                } else if let Some(msg) = info.downcast_ref::<&'static str>() {
+                    msg
+                } else {
+                    "unknown"
+                };
+                event!(Level::ERROR, "polling task panicked: {msg}");
+                error_count += 1;
+            }
         }
-        .instrument(info_span!("polling_task", sub_id = sub_id))
-    });
-    future::join_all(tasks).await;
+        event!(Level::INFO, "sleep for 10s before retrying");
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+    event!(Level::WARN, "too many errors, ending this task");
+}
+
+async fn poll_all(
+    scheduler: Arc<Scheduler<SubscriptionId>>,
+    runner: OllamaRunner,
+    db: DatabaseConnection,
+    working_dir: PathBuf,
+    bot: Bot,
+    echos: UpdateEchoHistory,
+) {
+    /// This is safe because the outside does not know about any internal state of `poll_one`
+    struct UnsafeCell<T>(T);
+    unsafe impl<T> Send for UnsafeCell<T> {}
+    unsafe impl<T> Sync for UnsafeCell<T> {}
+    impl<T: Future> Future for UnsafeCell<T> {
+        type Output = T::Output;
+
+        fn poll(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            let inner: Pin<&mut T> = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
+            inner.poll(cx)
+        }
+    }
+
+    let mut tasks = scheduler
+        .schedules()
+        .await
+        .into_iter()
+        .map(|schedule| {
+            event!(Level::TRACE, "start polling all");
+            let sub_id = *schedule.key();
+            let scheduler = Arc::clone(&scheduler);
+            let runner = runner.clone();
+            let db = db.clone();
+            let working_dir = working_dir.clone();
+            let bot = bot.clone();
+            let echos = echos.clone();
+            async move {
+                poll_one(sub_id, &scheduler, &runner, &db, &working_dir, &bot, &echos)
+                    .instrument(info_span!("polling_task", sub_id = sub_id))
+                    .await
+            }
+        })
+        .map(|f| tokio::spawn(UnsafeCell(f)))
+        .collect_vec();
+    loop {
+        let Ok((queue_type, key)) = scheduler.until_next_reschedule().await else {
+            continue;
+        };
+        match queue_type {
+            QueueType::Exising => {
+                // This case it is handled within `Update`
+                event!(Level::TRACE, "reschedule triggered for sub {key}");
+            }
+            QueueType::New => {
+                event!(Level::TRACE, "new schedule triggered for sub {key}");
+                let scheduler = Arc::clone(&scheduler);
+                let runner = runner.clone();
+                let db = db.clone();
+                let working_dir = working_dir.clone();
+                let bot = bot.clone();
+                let echos = echos.clone();
+
+                tasks.push(tokio::spawn(UnsafeCell(async move {
+                    poll_one(key, &scheduler, &runner, &db, &working_dir, &bot, &echos)
+                        .instrument(info_span!("polling_task", sub_id = key))
+                        .await
+                })));
+            }
+        }
+    }
 }
 
 async fn send_update_messages<Feed_>(
