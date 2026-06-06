@@ -46,6 +46,11 @@ in
       default = "/var/lib/not-yet";
       description = "The data directory where database and dialog histories are stored.";
     };
+    model = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Ollama model name.";
+    };
     extraEnv = lib.mkOption {
       default = null;
       type = lib.types.nullOr lib.types.envVar;
@@ -85,9 +90,11 @@ in
               "--config ${cfg.dataPath}"
             ])
             + lib.optionalString (cfg.extraOpts != null) cfg.extraOpts;
-          Environment =
-            [ "NOT_YET_LOCK_FILE=/run/not-yet/not-yet.lock" ]
-            ++ lib.optional (cfg.extraEnv != null) cfg.extraEnv;
+          Environment = [
+            "NOT_YET_LOCK_FILE=/run/not-yet/not-yet.lock"
+          ]
+          ++ lib.optional (cfg.extraEnv != null) cfg.extraEnv
+          ++ lib.optional (cfg.model != null) "NOT_YET_MODEL=${cfg.model}";
           DynamicUser = true;
           RuntimeDirectory = [ "not-yet" ];
           RuntimeDirectoryMode = "0777";

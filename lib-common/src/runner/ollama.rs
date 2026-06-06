@@ -33,9 +33,10 @@ impl Default for OllamaRunner {
         let url = std::env::var("OLLAMA_ENDPOINT")
             .map(|s| Url::parse(s.as_str()).expect("invalid OLLAMA_ENDPOINT environment variable"))
             .unwrap_or(Url::parse("http://localhost:11434").unwrap());
+        let model = std::env::var("NOT_YET_MODEL").unwrap_or("qwen3.5:9b".into());
         Self {
             ollama: Arc::new(Ollama::from_url(url)),
-            model_name: "qwen3.5:9b".into(),
+            model_name: model.into(),
         }
     }
 }
