@@ -6,7 +6,7 @@ use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
 use ::futures::future;
 use anyhow::anyhow;
 use app_common::config::ParseConfigPath;
-use app_common::poller::{UpdateContext, Updater};
+use app_common::poller::{AttachToPoller, UpdateContext, Updater};
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use lib_common::agent::decision::Decider;
@@ -128,38 +128,11 @@ pub(super) struct TgInitResult {
     whitelist: WhitelistAuthenticator<UserId, AccessLevel>,
 }
 
-impl InitResult for TgInitResult {
-    type ScheduleKey = SubscriptionId;
-
-    async fn main(self, scheduler: Arc<Scheduler<Self::ScheduleKey>>) -> Result<(), anyhow::Error> {
-        let token = OnetimeToken::new();
-        println!("access token: {}", token.value().await);
-
-        Dispatcher::builder(self.bot.clone(), bot_state_machine())
-            .dependencies(dptree::deps![
-                InMemStorage::<State>::new(),
-                self.db.clone(),
-                self.data_path.clone(),
-                self.runner.clone(),
-                Arc::new(Authenticator::from((
-                    self.whitelist,
-                    SqliteAuthenticator::new(self.db.clone())
-                ))),
-                self.echos.clone(),
-                token,
-                scheduler
-            ])
-            .enable_ctrlc_handler()
-            .build()
-            .dispatch()
-            .await;
-        Ok(())
-    }
-
+impl AttachToPoller<SubscriptionId> for TgInitResult {
     async fn attach_to_poller<'a>(
         &self,
-        mut poller: app_common::poller::PollerTransaction<'a, Self::ScheduleKey>,
-        key: Self::ScheduleKey,
+        poller: &mut app_common::poller::PollerTransaction<'a, SubscriptionId>,
+        key: SubscriptionId,
     ) -> anyhow::Result<()> {
         let Some(sub) = subscription::Entity::find_by_id(key).one(&self.db).await? else {
             event!(Level::ERROR, "failed to find subscription from id");
@@ -221,6 +194,35 @@ impl InitResult for TgInitResult {
             }
         }
 
+        Ok(())
+    }
+}
+
+impl InitResult for TgInitResult {
+    type ScheduleKey = SubscriptionId;
+
+    async fn main(&self, scheduler: Arc<Scheduler<Self::ScheduleKey>>) -> Result<(), anyhow::Error> {
+        let token = OnetimeToken::new();
+        println!("access token: {}", token.value().await);
+
+        Dispatcher::builder(self.bot.clone(), bot_state_machine())
+            .dependencies(dptree::deps![
+                InMemStorage::<State>::new(),
+                self.db.clone(),
+                self.data_path.clone(),
+                self.runner.clone(),
+                Arc::new(Authenticator::from((
+                    self.whitelist.clone(),
+                    SqliteAuthenticator::new(self.db.clone())
+                ))),
+                self.echos.clone(),
+                token,
+                scheduler
+            ])
+            .enable_ctrlc_handler()
+            .build()
+            .dispatch()
+            .await;
         Ok(())
     }
 

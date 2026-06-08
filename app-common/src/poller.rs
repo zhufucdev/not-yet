@@ -23,6 +23,15 @@ pub struct PollerTransaction<'a, K> {
     items: RwLockWriteGuard<'a, HashMap<K, PollerItem>>,
 }
 
+#[trait_variant::make(Send)]
+pub trait AttachToPoller<K> {
+    async fn attach_to_poller<'a>(
+        &self,
+        poller: &mut PollerTransaction<'a, K>,
+        key: K,
+    ) -> anyhow::Result<()>;
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct UpdateContext {
     pub rss_server: Arc<crate::rss::ServerState>,
@@ -92,7 +101,11 @@ impl<K> Poller<K>
 where
     K: KeyContract + Display + 'static,
 {
-    pub async fn poll_all(&self, scheduler: Arc<Scheduler<K>>) -> Result<(), anyhow::Error> {
+    pub async fn poll_all(
+        &self,
+        scheduler: Arc<Scheduler<K>>,
+        attacher: Option<&impl AttachToPoller<K>>,
+    ) -> Result<(), anyhow::Error> {
         event!(Level::TRACE, "poll_all");
         /// This is safe because the outside does not know about any internal state of `poll_one`
         struct UnsafeCell<T>(T);
@@ -110,6 +123,27 @@ where
             }
         }
 
+        if let Some(attacher) = attacher {
+            let missing_keys = {
+                let items = self.items.read().await;
+                scheduler
+                    .schedules()
+                    .await
+                    .into_iter()
+                    .filter_map(|s| {
+                        if !items.contains_key(s.key()) {
+                            Some(s.key().clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let mut transaction = self.transaction().await;
+            for key in missing_keys.into_iter() {
+                attacher.attach_to_poller(&mut transaction, key).await?;
+            }
+        }
         let tasks = {
             let mut updaters_guard = self.items.write().await;
             scheduler
@@ -148,7 +182,19 @@ where
                 }
                 QueueType::New => {
                     event!(Level::TRACE, "new schedule triggered for key {key:?}");
-                    let Some(updater) = self.items.write().await.remove(&key) else {
+                    let updater = if let Some(updater) = self.items.write().await.remove(&key) {
+                        updater
+                    } else if let Some(attacher) = attacher {
+                        attacher
+                            .attach_to_poller(&mut self.transaction().await, key.clone())
+                            .await?;
+                        if let Some(updater) = self.items.write().await.remove(&key) {
+                            updater
+                        } else {
+                            event!(Level::WARN, "missing updater for key {key:?}");
+                            continue;
+                        }
+                    } else {
                         event!(Level::WARN, "missing updater for key {key:?}");
                         continue;
                     };
@@ -168,7 +214,7 @@ where
     }
 }
 
-trait UpdaterHolder: Send {
+trait UpdaterHolder: Send + Sync {
     fn on_update<'s>(
         &'s self,
         material: Option<Box<dyn Any + Send + Sync>>,

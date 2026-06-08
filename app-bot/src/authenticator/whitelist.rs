@@ -2,6 +2,7 @@ use thiserror::Error;
 
 use crate::authenticator::{Access, Authenticator};
 
+#[derive(Clone)]
 pub struct WhitelistAuthenticator<UserId, Level> {
     accept: Vec<UserId>,
     level: Level,

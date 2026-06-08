@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use app_common::{
     config::ParseConfigPath,
-    poller::{Poller, UpdateContext},
+    poller::{AttachToPoller, Poller, UpdateContext},
     rss::RssServer,
     verbosity::WithVerbosity,
 };
@@ -70,7 +70,7 @@ pub async fn main() -> anyhow::Result<()> {
         rss_server: Default::default(),
     });
     future::try_join_all(scheduler.schedules().await.iter().map(async |schedule| {
-        app.attach_to_poller(poller.transaction().await, schedule.key().clone())
+        app.attach_to_poller(&mut poller.transaction().await, schedule.key().clone())
             .await
     }))
     .await?;
@@ -82,7 +82,7 @@ pub async fn main() -> anyhow::Result<()> {
             };
             event!(Level::ERROR, "app exited: {err}");
         },
-        r = poller.poll_all(scheduler) => {
+        r = poller.poll_all(scheduler, Some(&app)) => {
             event!(Level::ERROR, "poller exited with {r:?}");
         },
         Err(err) = async {
