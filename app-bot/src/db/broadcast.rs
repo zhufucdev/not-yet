@@ -11,12 +11,13 @@ pub struct Model {
     #[cfg(feature = "serve-rss")]
     pub rss_key: Option<String>,
     #[cfg(feature = "serve-rss")]
-    pub rss_title: Option<String>,
-    #[cfg(feature = "serve-rss")]
-    pub rss_description: Option<String>,
 
     #[sea_orm(belongs_to, from = "subscription_id", to = "id")]
     pub subscription: HasOne<super::subscription::Entity>,
+
+    #[cfg(feature = "serve-rss")]
+    #[sea_orm(belongs_to, from = "rss_key", to = "key")]
+    pub rss: Option<super::broadcast_rss::Entity>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]

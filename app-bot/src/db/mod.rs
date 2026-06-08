@@ -1,9 +1,11 @@
 pub mod atom;
+pub mod broadcast;
+#[cfg(feature = "serve-rss")]
+pub mod broadcast_rss;
 pub mod dialog;
 pub mod error;
 pub mod header;
+pub mod notify;
 pub mod rss;
 pub mod subscription;
 pub mod user;
-pub mod notify;
-pub mod broadcast;

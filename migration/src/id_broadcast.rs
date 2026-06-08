@@ -7,6 +7,12 @@ pub enum Broadcast {
     SubscriptionId,
     Kind,
     RssKey,
-    RssTitle,
-    RssDescription,
+}
+
+#[derive(DeriveIden)]
+pub enum BroadcastRss {
+    Table,
+    Key,
+    Title,
+    Description,
 }

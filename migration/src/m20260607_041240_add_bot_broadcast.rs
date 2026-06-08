@@ -1,6 +1,9 @@
 use sea_orm_migration::{prelude::*, schema::*};
 
-use crate::{id_broadcast::Broadcast, id_subscription::Subscription};
+use crate::{
+    id_broadcast::{Broadcast, BroadcastRss},
+    id_subscription::Subscription,
+};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -11,19 +14,35 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
+                    .table(BroadcastRss::Table)
+                    .col(string(BroadcastRss::Key).primary_key())
+                    .col(string(BroadcastRss::Title))
+                    .col(string(BroadcastRss::Description))
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
                     .if_not_exists()
                     .table(Broadcast::Table)
                     .col(integer(Broadcast::Id).primary_key().auto_increment())
                     .col(integer(Broadcast::SubscriptionId).not_null())
                     .col(integer(Broadcast::Kind).not_null().default(0))
                     .col(string(Broadcast::RssKey))
-                    .col(string(Broadcast::RssTitle))
-                    .col(string(Broadcast::RssDescription))
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_broadcast_sub_id")
                             .from(Broadcast::Table, Broadcast::SubscriptionId)
                             .to(Subscription::Table, Subscription::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk_broadcast_rss_key")
+                            .from(Broadcast::Table, Broadcast::RssKey)
+                            .to(BroadcastRss::Table, BroadcastRss::Key)
                             .on_delete(ForeignKeyAction::Cascade)
                             .on_update(ForeignKeyAction::Cascade),
                     )

@@ -1,13 +1,12 @@
 use std::marker::PhantomData;
 use std::path::PathBuf;
-use std::pin::Pin;
-use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc};
 
 use ::futures::future;
 use anyhow::anyhow;
 use app_common::config::ParseConfigPath;
 use app_common::poller::{AttachToPoller, UpdateContext, Updater};
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use itertools::Itertools;
 use lib_common::agent::decision::Decider;
 use lib_common::agent::error::GetTruthValueError;
@@ -24,7 +23,7 @@ use lib_common::secure;
 use lib_common::update::Source;
 use lib_common::{
     agent::{LlmConditionMatcher, memory::decision::SqliteDecisionMemory},
-    polling::{Schedule, Scheduler, schedule::QueueType},
+    polling::{Schedule, Scheduler},
     source::{DefaultMetadata, Feed, LlmComprehendable, RssFeed, atom::AtomFeed},
     update::sqlite::SqliteUpdatePersistence,
 };
@@ -33,7 +32,6 @@ use sea_orm::{
     ActiveEnum, ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, Iterable, ModelTrait,
     QueryFilter,
 };
-use serde::Deserialize;
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::SmolStr;
 use teloxide::sugar::request::RequestReplyExt;
@@ -50,7 +48,6 @@ use teloxide::{
 use tokio::sync::RwLock;
 use tracing::{Instrument, Level, event, info_span};
 
-use crate::authenticator::whitelist;
 use crate::db::notify;
 use crate::init::InitResult;
 use crate::telegram::optimize::TgOptimizerAction;
@@ -201,7 +198,10 @@ impl AttachToPoller<SubscriptionId> for TgInitResult {
 impl InitResult for TgInitResult {
     type ScheduleKey = SubscriptionId;
 
-    async fn main(&self, scheduler: Arc<Scheduler<Self::ScheduleKey>>) -> Result<(), anyhow::Error> {
+    async fn main(
+        &self,
+        scheduler: Arc<Scheduler<Self::ScheduleKey>>,
+    ) -> Result<(), anyhow::Error> {
         let token = OnetimeToken::new();
         println!("access token: {}", token.value().await);
 
@@ -275,7 +275,7 @@ impl InitResult for TgInitResult {
                 .map(|(config, sub)| (config, sub.unwrap()))
                 .chunk_by(|(config, _)| config.rss_key.as_ref().unwrap().clone())
                 .into_iter()
-                .map(|(_, group)| {
+                .flat_map(|(_, group)| {
                     group.map(
                         async |(config, sub)| -> anyhow::Result<(db::broadcast::Model, Vec<rss::Item>)> {
                             Ok((
@@ -310,15 +310,18 @@ impl InitResult for TgInitResult {
                         },
                     )
                 })
-                .flatten(),
+                .map(async |fut| -> anyhow::Result<(db::broadcast_rss::Model, Vec<rss::Item>)> {
+                    let (config, items) = fut.await?;
+                    Ok((config.find_related(db::broadcast_rss::Entity).one(&self.db).await?.unwrap(), items))
+                }),
         )
         .await?
         .into_iter()
         .map(|(config, items)| {
             app_common::rss::Broadcast::new(
-                config.rss_key.unwrap(),
-                config.rss_title.unwrap(),
-                config.rss_description.unwrap(),
+                config.key,
+                config.title,
+                config.description,
                 items
             )
         });
