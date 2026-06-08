@@ -7,7 +7,7 @@ use std::{
 };
 use thiserror::Error;
 
-use async_stream::try_stream;
+use async_stream::{stream, try_stream};
 use futures::Stream;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use serde::{Serialize, de::DeserializeOwned};
@@ -114,7 +114,7 @@ where
         query = query
             .filter(super::material::Column::Kind.eq(Self::Material::KIND.unwrap()))
             .order_by_desc(Column::Time);
-        try_stream! {
+        stream! {
             for (decision, material) in query
                 .all(&self.db)
                 .await? {
@@ -126,11 +126,11 @@ where
                 }
                 .instrument(info_span!("sqlite_decision_mem", file = ?shasum))
                 .await;
-                yield Decision {
+                yield material.map(|material| Decision {
                     time: decision.time,
                     is_truthy: decision.is_truthy,
-                    material: material?,
-                };
+                    material,
+                });
             }
         }
     }

@@ -265,67 +265,75 @@ impl InitResult for TgInitResult {
                     .map(|item| item.as_ref().material.clone().into())
                     .collect::<Vec<_>>()
                     .await;
+            event!(Level::DEBUG, "got {} items for sub {}", items.len(), sub_id);
             Ok(items)
         }
 
         let broadcasts = future::try_join_all(
             db::broadcast::Entity::find()
                 .find_also_related(db::subscription::Entity)
+                .find_also_related(db::broadcast_rss::Entity)
                 .filter(db::broadcast::Column::Kind.eq(db::broadcast::Kind::Rss))
                 .all(&self.db)
                 .await?
                 .into_iter()
-                .map(|(config, sub)| (config, sub.unwrap()))
-                .chunk_by(|(config, _)| config.rss_key.as_ref().unwrap().clone())
+                .map(|(config, sub, rss)| (sub.unwrap(), rss.unwrap()))
+                .chunk_by(|(_, rss)| rss.clone())
                 .into_iter()
-                .flat_map(|(_, group)| {
-                    group.map(
-                        async |(config, sub)| -> anyhow::Result<(db::broadcast::Model, Vec<rss::Item>)> {
-                            Ok((
-                                config,
-                                (match sub.kind {
-                                    subscription::Kind::Rss => {
-                                        use lib_common::source::LlmRssItem;
+                .map(async |(rss, group)| -> anyhow::Result<_> {
+                    Ok((
+                        rss,
+                        future::try_join_all(group.map(async |(sub, _)| -> anyhow::Result<_> {
+                            Ok((match sub.kind {
+                                subscription::Kind::Rss => {
+                                    use lib_common::source::LlmRssItem;
 
-                                        get_rss_items::<LlmRssItem>(
-                                            self.db.clone(),
-                                            self.data_path.clone(),
-                                            sub.id,
-                                        )
-                                        .await
-                                    }
-                                    subscription::Kind::Atom => {
-                                        use lib_common::source::atom::AtomFeedItem;
+                                    get_rss_items::<LlmRssItem>(
+                                        self.db.clone(),
+                                        self.data_path.clone(),
+                                        sub.id,
+                                    )
+                                    .await
+                                }
+                                subscription::Kind::Atom => {
+                                    use lib_common::source::atom::AtomFeedItem;
 
-                                        get_rss_items::<AtomFeedItem>(
-                                            self.db.clone(),
-                                            self.data_path.clone(),
-                                            sub.id,
-                                        )
-                                        .await
-                                    }
-                                })?
-                                .into_iter()
-                                .sorted_by_key(|item| item.pub_date().map(|date_str| date_str.to_string()).unwrap_or_default())
-                                .rev()
-                                .collect_vec()
-                            ))
-                        },
-                    )
-                })
-                .map(async |fut| -> anyhow::Result<(db::broadcast_rss::Model, Vec<rss::Item>)> {
-                    let (config, items) = fut.await?;
-                    Ok((config.find_related(db::broadcast_rss::Entity).one(&self.db).await?.unwrap(), items))
+                                    get_rss_items::<AtomFeedItem>(
+                                        self.db.clone(),
+                                        self.data_path.clone(),
+                                        sub.id,
+                                    )
+                                    .await
+                                }
+                            })?
+                            .into_iter())
+                        }))
+                        .await?,
+                    ))
                 }),
         )
         .await?
         .into_iter()
         .map(|(config, items)| {
+            event!(
+                Level::DEBUG,
+                "got {} items for rss {}",
+                items.len(),
+                config.key
+            );
             app_common::rss::Broadcast::new(
                 config.key,
                 config.title,
                 config.description,
                 items
+                    .into_iter()
+                    .flatten()
+                    .sorted_by_key(|item| {
+                        item.pub_date()
+                            .map(|date_str| date_str.to_string())
+                            .unwrap_or_default()
+                    })
+                    .rev(),
             )
         });
 

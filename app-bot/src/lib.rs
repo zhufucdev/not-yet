@@ -23,6 +23,8 @@ use lib_common::polling::Scheduler;
 pub use telegram as flavor;
 
 pub use flavor::UserId;
+#[cfg(feature = "serve-rss")]
+use tracing::{Instrument, info_span};
 use tracing::{Level, event};
 use tracing_subscriber::EnvFilter;
 
@@ -65,7 +67,13 @@ pub async fn main() -> anyhow::Result<()> {
     let scheduler = Arc::new(Scheduler::from_iter(app.get_schedules().await?));
     let poller = Poller::new(UpdateContext {
         #[cfg(feature = "serve-rss")]
-        rss_server: Arc::new(app.get_rss_broadcasts().await?.into_iter().collect()),
+        rss_server: Arc::new(
+            app.get_rss_broadcasts()
+                .instrument(info_span!("serve_rss"))
+                .await?
+                .into_iter()
+                .collect(),
+        ),
         #[cfg(not(feature = "serve-rss"))]
         rss_server: Default::default(),
     });
