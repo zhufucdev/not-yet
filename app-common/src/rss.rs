@@ -8,6 +8,7 @@ use axum::{
     routing::get,
 };
 use tokio::sync::RwLock;
+use tracing::{Level, event};
 
 use crate::meta;
 
@@ -51,7 +52,7 @@ impl RssServer {
 
     pub async fn run(&self) -> Result<(), std::io::Error> {
         let app = axum::Router::new()
-            .route("/{key}.rss", get(get_rss_by_key))
+            .route("/{key}", get(get_rss_by_key))
             .route("/", get(get_root))
             .layer(Extension(self.host.clone()))
             .with_state(Arc::clone(&self.state));
@@ -66,11 +67,12 @@ impl RssServer {
 
 impl ServerState {
     fn new(data: impl IntoIterator<Item = Broadcast>) -> Self {
-        Self(RwLock::new(
-            data.into_iter()
-                .map(|b| (b.key.clone(), Arc::new(b)))
-                .collect(),
-        ))
+        let items: HashMap<String, Arc<Broadcast>> = data
+            .into_iter()
+            .map(|b| (b.key.clone(), Arc::new(b)))
+            .collect();
+        event!(Level::DEBUG, "loaded {} broadcasts", items.len());
+        Self(RwLock::new(items))
     }
 
     pub async fn broadcast(&self, key: impl AsRef<str>) -> Option<Arc<Broadcast>> {

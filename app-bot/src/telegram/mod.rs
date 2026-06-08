@@ -395,8 +395,15 @@ struct LlmDeciderUpdater<F> {
 impl<F> Updater for LlmDeciderUpdater<F>
 where
     F: Feed<Metadata = DefaultMetadata> + Send + Sync,
-    F::Item:
-        LlmComprehendable + Clone + Send + Sync + Serialize + DeserializeOwned + Display + 'static,
+    F::Item: LlmComprehendable
+        + Clone
+        + Send
+        + Sync
+        + Serialize
+        + DeserializeOwned
+        + Display
+        + Into<rss::Item>
+        + 'static,
     F::Error: Display,
 {
     type Key = SubscriptionId;
@@ -480,6 +487,29 @@ where
         if matches!(recipient, Recipient::ChannelUsername(_)) {
             self.echos.write().await.push(echo);
         }
+        #[cfg(feature = "serve-rss")]
+        async {
+            future::join_all(
+                self.sub
+                    .find_related(db::broadcast::Entity)
+                    .filter(db::broadcast::Column::Kind.eq(db::broadcast::Kind::Rss))
+                    .all(&self.db)
+                    .await?
+                    .into_iter()
+                    .map(async |config| {
+                        ctx.rss_server
+                            .broadcast(config.rss_key.unwrap())
+                            .await
+                            .unwrap()
+                            .push_item((*item.clone()).into())
+                            .await;
+                    }),
+            )
+            .await;
+
+            Result::<_, anyhow::Error>::Ok(())
+        }
+        .await?;
         Ok(true)
     }
 }
