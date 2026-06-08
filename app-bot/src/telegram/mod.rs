@@ -255,13 +255,16 @@ impl InitResult for TgInitResult {
                 + Send
                 + Sync,
         {
+            use futures::StreamExt;
+
             let items: Vec<rss::Item> =
                 SqliteDecisionMemory::<M>::new(db, working_dir, Some(sub_id))?
                     .iter_newest_first()
-                    .try_filter(|item| future::ready(item.as_ref().is_truthy))
-                    .map_ok(|item| item.as_ref().material.clone().into())
-                    .try_collect::<Vec<_>>()
-                    .await?;
+                    .filter_map(|result| future::ready(result.ok()))
+                    .filter(|item| future::ready(item.as_ref().is_truthy))
+                    .map(|item| item.as_ref().material.clone().into())
+                    .collect::<Vec<_>>()
+                    .await;
             Ok(items)
         }
 
