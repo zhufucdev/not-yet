@@ -11,7 +11,6 @@ use anyhow::anyhow;
 use app_common::config::ParseConfigPath;
 use clap::Parser;
 use futures::{StreamExt, future, pin_mut};
-use migration::prelude::serde_json;
 use sea_orm::DatabaseConnection;
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::ToSmolStr;
@@ -49,7 +48,7 @@ pub async fn main() -> anyhow::Result<()> {
                 .unwrap_or_default(),
         )
         .init();
-    let data_path = args.config.parse_config()?;
+    let data_path = args.config.parse_config_path()?;
     let config = app_common::config::parse_config::<Config>(
         &data_path,
         include_bytes!("../asset/default_config.toml"),
@@ -189,7 +188,7 @@ where
     );
     let persistence = AcceptUpdatePersistence::new();
     // TODO:oneshot should return immediately when there is no new update
-    let updates = app_common::feed::check(sub, &feed, &scheduler, persistence, buffer_size);
+    let updates = app_common::feed::check(sub, &feed, &scheduler, &persistence, buffer_size);
     pin_mut!(updates);
     if let Some(result) = updates.next().await {
         let (Some(update), task) = result? else {
@@ -238,7 +237,7 @@ where
         sub.hash(&mut hasher);
         format!("{:x}", hasher.finish())
     })?;
-    let updates = app_common::feed::check(sub, &feed, &scheduler, persistence, buffer_size);
+    let updates = app_common::feed::check(sub, &feed, &scheduler, &persistence, buffer_size);
     pin_mut!(updates);
     #[derive(Serialize)]
     struct Message {

@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
@@ -5,7 +6,7 @@ use std::{fmt::Display, hash::Hash, path::Path, sync::Arc, time::Duration};
 use ::futures::future;
 use anyhow::anyhow;
 use app_common::config::ParseConfigPath;
-use clap::Parser;
+use app_common::poller::{UpdateContext, Updater};
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use lib_common::agent::decision::Decider;
@@ -20,6 +21,7 @@ use lib_common::agent::optimize::{
 };
 use lib_common::runner::OllamaRunner;
 use lib_common::secure;
+use lib_common::update::Source;
 use lib_common::{
     agent::{LlmConditionMatcher, memory::decision::SqliteDecisionMemory},
     polling::{Schedule, Scheduler, schedule::QueueType},
@@ -31,10 +33,11 @@ use sea_orm::{
     ActiveEnum, ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, Iterable, ModelTrait,
     QueryFilter,
 };
+use serde::Deserialize;
 use serde::{Serialize, de::DeserializeOwned};
 use smol_str::SmolStr;
 use teloxide::sugar::request::RequestReplyExt;
-use teloxide::types::{ChatKind, MessageId, PublicChatKind, Recipient};
+use teloxide::types::{MessageId, Recipient};
 use teloxide::utils::render::RenderMessageTextHelper;
 use teloxide::{
     dispatching::{
@@ -45,11 +48,11 @@ use teloxide::{
     prelude::*,
 };
 use tokio::sync::RwLock;
-use tokio::{pin, select};
 use tracing::{Instrument, Level, event, info_span};
-use tracing_subscriber::EnvFilter;
 
+use crate::authenticator::whitelist;
 use crate::db::notify;
+use crate::init::InitResult;
 use crate::telegram::optimize::TgOptimizerAction;
 use crate::telegram::optimize::renotify::SetReceipientTool;
 use crate::telegram::state::{LlmAssignment, OptimizationTask, StateFeedback};
@@ -61,12 +64,12 @@ use crate::{
     },
     config::Config,
     db::{
-        self, atom, rss,
+        self, atom,
         subscription::{self, SubscriptionId},
         user::AccessLevel,
     },
     rss::add_feed_subscription_for,
-    telegram::{args::Args, command::Command, repmark::button_repmark, state::State},
+    telegram::{command::Command, repmark::button_repmark, state::State},
     token::OnetimeToken,
 };
 
@@ -85,91 +88,241 @@ type Authenticator = PriorityAuthenticator<(
 )>;
 
 pub type UserId = i64;
+pub use args::Args;
 
-pub(super) async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(args.verbosity.tracing_level_filter().into())
-                .from_env()
-                .unwrap_or_default(),
-        )
-        .init();
-    let data_path = args.config.parse_config()?;
-    let config = app_common::config::parse_config::<Config>(
-        &data_path,
-        include_bytes!("../../asset/default_config.toml"),
-    )
-    .await?;
-
+pub(super) async fn init(args: &Args, config: &Config) -> anyhow::Result<TgInitResult> {
     let bot = Bot::with_client(
         std::env::var("BOT_TOKEN")
             .ok()
-            .or(config.bot_token)
-            .or(args.bot_token)
+            .or(args.bot_token.clone())
+            .or(config.bot_token.clone())
             .ok_or(anyhow!("invalid BOT_TOKEN environment variable, either set the BOT_TOKEN environment variable, specify in the configuration or use the --bot-token command line argument"))?,
         teloxide::net::client_from_env(),
     );
 
-    let token = OnetimeToken::new();
-    println!("access token: {}", token.value().await);
+    let data_path = args.parse_config_path()?;
     let db = app_common::config::setup_db(&data_path).await?;
-    let scheduler = Arc::new(
-        get_schedules(&db)
-            .await?
-            .into_iter()
-            .collect::<Scheduler<SubscriptionId>>(),
-    );
     let runner = OllamaRunner::default();
     let echos = UpdateEchoHistory::default();
+    let whitelist = WhitelistAuthenticator::new(
+        config.whitelist.clone().unwrap_or_default(),
+        AccessLevel::ConfiguredWhitelist,
+    );
 
-    future::select(
-        Box::pin(
-            Dispatcher::builder(bot.clone(), bot_state_machine())
-                .dependencies(dptree::deps![
-                    InMemStorage::<State>::new(),
-                    token,
-                    db.clone(),
-                    data_path.clone(),
-                    runner.clone(),
-                    Arc::new(Authenticator::from((
-                        WhitelistAuthenticator::new(
-                            config.whitelist.unwrap_or_default(),
-                            AccessLevel::ConfiguredWhitelist
-                        ),
-                        SqliteAuthenticator::new(db.clone())
-                    ))),
-                    scheduler.clone(),
-                    echos.clone()
-                ])
-                .enable_ctrlc_handler()
-                .build()
-                .dispatch(),
-        ),
-        Box::pin(
-            async {
-                loop {
-                    poll_all(
-                        scheduler.clone(),
-                        runner.clone(),
-                        db.clone(),
-                        data_path.clone(),
-                        bot.clone(),
-                        echos.clone(),
-                    )
-                    .await;
-                    event!(Level::WARN, "poll_all ended prematurely");
-                    event!(Level::INFO, "sleep for 10s before retrying");
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                }
+    Ok(TgInitResult {
+        bot,
+        db,
+        data_path,
+        runner,
+        echos,
+        whitelist,
+    })
+}
+
+pub(super) struct TgInitResult {
+    bot: Bot,
+    db: DatabaseConnection,
+    data_path: PathBuf,
+    runner: OllamaRunner,
+    echos: UpdateEchoHistory,
+    whitelist: WhitelistAuthenticator<UserId, AccessLevel>,
+}
+
+impl InitResult for TgInitResult {
+    type ScheduleKey = SubscriptionId;
+
+    async fn main(self, scheduler: Arc<Scheduler<Self::ScheduleKey>>) -> Result<(), anyhow::Error> {
+        let token = OnetimeToken::new();
+        println!("access token: {}", token.value().await);
+
+        Dispatcher::builder(self.bot.clone(), bot_state_machine())
+            .dependencies(dptree::deps![
+                InMemStorage::<State>::new(),
+                self.db.clone(),
+                self.data_path.clone(),
+                self.runner.clone(),
+                Arc::new(Authenticator::from((
+                    self.whitelist,
+                    SqliteAuthenticator::new(self.db.clone())
+                ))),
+                self.echos.clone(),
+                token,
+                scheduler
+            ])
+            .enable_ctrlc_handler()
+            .build()
+            .dispatch()
+            .await;
+        Ok(())
+    }
+
+    async fn attach_to_poller<'a>(
+        &self,
+        mut poller: app_common::poller::PollerTransaction<'a, Self::ScheduleKey>,
+        key: Self::ScheduleKey,
+    ) -> anyhow::Result<()> {
+        let Some(sub) = subscription::Entity::find_by_id(key).one(&self.db).await? else {
+            event!(Level::ERROR, "failed to find subscription from id");
+            return Ok(());
+        };
+        let (rss, atom) = future::try_join(
+            sub.find_related(db::rss::Entity).one(&self.db),
+            sub.find_related(atom::Entity).one(&self.db),
+        )
+        .await?;
+
+        let buffer_size = sub.buffer_size as usize;
+        match sub.kind {
+            subscription::Kind::Rss => {
+                let Some(rss) = rss else {
+                    return Err(anyhow!("RSS subscription has no associated feed"));
+                };
+                let feed: RssFeed = rss.try_into()?;
+                let updater = LlmDeciderUpdater {
+                    sub,
+                    runner: self.runner.clone(),
+                    bot: self.bot.clone(),
+                    echos: self.echos.clone(),
+                    db: self.db.clone(),
+                    working_dir: self.data_path.clone(),
+                    feed_url: feed.url().to_string(),
+                    _marker: PhantomData,
+                };
+                poller.add_updater(
+                    key,
+                    updater,
+                    feed,
+                    SqliteUpdatePersistence::new(self.db.clone(), key)?,
+                    buffer_size,
+                );
             }
-            .instrument(info_span!("task_loop")),
-        ),
-    )
-    .await;
+            subscription::Kind::Atom => {
+                let Some(atom) = atom else {
+                    return Err(anyhow!("Atom subscription has no associated feed"));
+                };
+                let feed: AtomFeed = atom.try_into()?;
+                let updater = LlmDeciderUpdater {
+                    sub,
+                    runner: self.runner.clone(),
+                    bot: self.bot.clone(),
+                    echos: self.echos.clone(),
+                    db: self.db.clone(),
+                    working_dir: self.data_path.clone(),
+                    feed_url: feed.url().to_string(),
+                    _marker: PhantomData,
+                };
+                poller.add_updater(
+                    key,
+                    updater,
+                    feed,
+                    SqliteUpdatePersistence::new(self.db.clone(), key)?,
+                    buffer_size,
+                );
+            }
+        }
 
-    Ok(())
+        Ok(())
+    }
+
+    async fn get_schedules(
+        &self,
+    ) -> anyhow::Result<impl IntoIterator<Item = Schedule<Self::ScheduleKey>>> {
+        Ok(subscription::Entity::find()
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .enumerate()
+            .map(|(id, s)| Schedule::new(id, s.id, s.schedule_trigger()).unwrap()))
+    }
+
+    #[cfg(feature = "serve-rss")]
+    async fn get_rss_broadcasts(
+        &self,
+    ) -> anyhow::Result<impl IntoIterator<Item = app_common::rss::Broadcast>> {
+        async fn get_rss_items<M>(
+            db: DatabaseConnection,
+            working_dir: PathBuf,
+            sub_id: SubscriptionId,
+        ) -> anyhow::Result<Vec<rss::Item>>
+        where
+            M: LlmComprehendable
+                + Clone
+                + Into<rss::Item>
+                + Serialize
+                + DeserializeOwned
+                + Send
+                + Sync,
+        {
+            let items: Vec<rss::Item> =
+                SqliteDecisionMemory::<M>::new(db, working_dir, Some(sub_id))?
+                    .iter_newest_first()
+                    .try_filter(|item| future::ready(item.as_ref().is_truthy))
+                    .map_ok(|item| item.as_ref().material.clone().into())
+                    .try_collect::<Vec<_>>()
+                    .await?;
+            Ok(items)
+        }
+
+        let broadcasts = future::try_join_all(
+            db::broadcast::Entity::find()
+                .find_also_related(db::subscription::Entity)
+                .filter(db::broadcast::Column::Kind.eq(db::broadcast::Kind::Rss))
+                .all(&self.db)
+                .await?
+                .into_iter()
+                .map(|(config, sub)| (config, sub.unwrap()))
+                .chunk_by(|(config, _)| config.rss_key.as_ref().unwrap().clone())
+                .into_iter()
+                .map(|(_, group)| {
+                    group.map(
+                        async |(config, sub)| -> anyhow::Result<(db::broadcast::Model, Vec<rss::Item>)> {
+                            Ok((
+                                config,
+                                (match sub.kind {
+                                    subscription::Kind::Rss => {
+                                        use lib_common::source::LlmRssItem;
+
+                                        get_rss_items::<LlmRssItem>(
+                                            self.db.clone(),
+                                            self.data_path.clone(),
+                                            sub.id,
+                                        )
+                                        .await
+                                    }
+                                    subscription::Kind::Atom => {
+                                        use lib_common::source::atom::AtomFeedItem;
+
+                                        get_rss_items::<AtomFeedItem>(
+                                            self.db.clone(),
+                                            self.data_path.clone(),
+                                            sub.id,
+                                        )
+                                        .await
+                                    }
+                                })?
+                                .into_iter()
+                                .sorted_by_key(|item| item.pub_date().map(|date_str| date_str.to_string()).unwrap_or_default())
+                                .rev()
+                                .collect_vec()
+                            ))
+                        },
+                    )
+                })
+                .flatten(),
+        )
+        .await?
+        .into_iter()
+        .map(|(config, items)| {
+            app_common::rss::Broadcast::new(
+                config.rss_key.unwrap(),
+                config.rss_title.unwrap(),
+                config.rss_description.unwrap(),
+                items
+            )
+        });
+
+        Ok(broadcasts)
+    }
 }
 
 fn bot_state_machine() -> UpdateHandler<anyhow::Error> {
@@ -242,7 +395,7 @@ async fn run_polling_task(
         return Ok(());
     };
     let (rss, atom) = future::try_join(
-        sub.find_related(rss::Entity).one(db),
+        sub.find_related(db::rss::Entity).one(db),
         sub.find_related(atom::Entity).one(db),
     )
     .await?;
@@ -412,6 +565,109 @@ async fn poll_all(
     }
 }
 
+struct LlmDeciderUpdater<F> {
+    sub: subscription::Model,
+    runner: OllamaRunner,
+    bot: Bot,
+    echos: UpdateEchoHistory,
+    db: DatabaseConnection,
+    working_dir: PathBuf,
+    feed_url: String,
+    _marker: PhantomData<F>,
+}
+
+impl<F> Updater for LlmDeciderUpdater<F>
+where
+    F: Feed<Metadata = DefaultMetadata> + Send + Sync,
+    F::Item:
+        LlmComprehendable + Clone + Send + Sync + Serialize + DeserializeOwned + Display + 'static,
+    F::Error: Display,
+{
+    type Key = SubscriptionId;
+
+    type Source = F;
+
+    async fn on_update(
+        &self,
+        material: Option<Box<<Self::Source as Source>::Item>>,
+        source: &Self::Source,
+        ctx: UpdateContext,
+    ) -> Result<bool, anyhow::Error> {
+        let Some(item) = material else {
+            return Ok(false);
+        };
+        let dialog_id = secure::generate_random_id(32);
+        let mut decision_mem =
+            SqliteDecisionMemory::new(self.db.clone(), &self.working_dir, Some(self.sub.id))?;
+        let decider = LlmConditionMatcher::new(
+            self.runner.clone(),
+            self.sub.condition.to_string(),
+            decision_mem.clone(),
+            FsDialogMemory::new(&self.working_dir, &dialog_id),
+            SqliteCriteriaMemory::new(self.db.clone(), Some(self.sub.id)),
+        );
+        match decider.get_truth_value(item.as_ref()).await {
+            Ok(false) => {
+                return Ok(false);
+            }
+            Ok(true) => {}
+            Err(GetTruthValueError::DecisionMemory(err)) => {
+                event!(Level::ERROR, "decision memory error: {err}");
+                event!(Level::WARN, "will clear decision memory");
+                decision_mem.clear().await?;
+            }
+            Err(err) => {
+                event!(Level::ERROR, "decider error: {err}");
+            }
+        }
+
+        let msg = match source.get_metadata().await {
+            Ok(meta) => format!(
+                "Your subscription to \"{}\" ({}) has an update! Check it out!\n{}",
+                meta.name,
+                self.feed_url,
+                item.to_string(),
+            )
+            .trim_end()
+            .to_string(),
+            Err(err) => {
+                event!(
+                    Level::WARN,
+                    "failed to fetch RSS feed metadata, falling back to URL only: {err}"
+                );
+                format!(
+                    "Your subscription to {} has an update! Check it out!\n{}",
+                    self.feed_url,
+                    item.to_string(),
+                )
+                .trim_end()
+                .to_string()
+            }
+        };
+        let dest = self.sub.find_related(notify::Entity).one(&self.db).await?;
+        let recipient: Recipient = dest
+            .map(|d| d.into())
+            .unwrap_or_else(|| UserId(self.sub.user_id as u64).into());
+        let echo = UpdateEcho {
+            msg: msg.clone(),
+            dialog_id: dialog_id.clone(),
+            sub_id: self.sub.id,
+            recipient: recipient.clone(),
+        };
+        let tg_msg = self.bot.send_message(recipient.clone(), msg).await?;
+        echo.as_active_model()
+            .set_msg_id(tg_msg.id.0)
+            .set_chat_id(tg_msg.chat.id.0)
+            .insert(&self.db)
+            .await
+            .inspect_err(|err| event!(Level::WARN, "failed to save dialog: {err}"))?;
+        if matches!(recipient, Recipient::ChannelUsername(_)) {
+            self.echos.write().await.push(echo);
+        }
+        Ok(true)
+    }
+}
+
 async fn send_update_messages<Feed_>(
     bot: &Bot,
     echos: &UpdateEchoHistory,
@@ -434,7 +690,7 @@ where
         &sub_id,
         feed,
         &scheduler,
-        SqliteUpdatePersistence::new(db.clone(), sub_id)?,
+        &SqliteUpdatePersistence::new(db.clone(), sub_id)?,
         sub.buffer_size as usize,
     )
     .inspect_err(|e| event!(Level::WARN, "check feed error: {e}"))
@@ -525,17 +781,6 @@ where
         "updates is supposed to be infinite, but ended prematurely. sub_id = {sub_id}"
     );
     Ok(())
-}
-
-async fn get_schedules(
-    db: &DatabaseConnection,
-) -> Result<impl IntoIterator<Item = Schedule<SubscriptionId>>, sea_orm::DbErr> {
-    Ok(subscription::Entity::find()
-        .all(db)
-        .await?
-        .into_iter()
-        .enumerate()
-        .map(|(id, s)| Schedule::new(id, s.id, s.schedule_trigger()).unwrap()))
 }
 
 async fn start(

@@ -16,7 +16,7 @@ use crate::{
         DefaultMetadata, Feed, LlmComprehendable, SharedImageOrText,
         utils::{self, UrlContent},
     },
-    update::Updatable,
+    update::{Source, Updatable},
 };
 
 pub struct RssFeed {
@@ -118,19 +118,19 @@ impl Feed for RssFeed {
 }
 
 impl Updatable for RssFeed {
-    type Item = LlmRssItem;
-    type Error = Error;
-
-    async fn get_items(
-        &self,
-    ) -> Result<Vec<<Self as Updatable>::Item>, <Self as Updatable>::Error> {
-        let (_, items) = self.cache.read().await.clone().expect("call update first");
-        return Ok(items);
-    }
-
     async fn update(&self) -> Result<(), Self::Error> {
         let channel = self.get_rss_channel().await?;
         self.update_from_channel(channel).await
+    }
+}
+
+impl Source for RssFeed {
+    type Item = LlmRssItem;
+    type Error = Error;
+
+    async fn get_items(&self) -> Result<Vec<<Self as Source>::Item>, <Self as Source>::Error> {
+        let (_, items) = self.cache.read().await.clone().expect("call update first");
+        return Ok(items);
     }
 }
 
@@ -223,6 +223,12 @@ impl std::hash::Hash for LlmRssItem {
             // effectively hashing name and url which is not guid but good enough
             self.title().hash(state);
         }
+    }
+}
+
+impl Into<rss::Item> for LlmRssItem {
+    fn into(self) -> rss::Item {
+        self.item
     }
 }
 

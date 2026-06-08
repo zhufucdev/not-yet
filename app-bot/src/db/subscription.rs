@@ -5,7 +5,7 @@ use lib_common::polling::trigger::ScheduleTrigger;
 use sea_orm::prelude::*;
 
 use crate::UserId;
-use crate::db::{atom, notify, rss};
+use crate::db::{atom, broadcast, notify, rss};
 
 use super::user;
 
@@ -36,6 +36,8 @@ pub struct Model {
     pub rss: HasOne<rss::Entity>,
     #[sea_orm(has_one)]
     pub atom: HasOne<atom::Entity>,
+    #[sea_orm(has_many)]
+    pub broadcast: HasMany<broadcast::Entity>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, DeriveDisplay)]

@@ -12,6 +12,7 @@ pub mod utils;
 pub use rss::{LlmRssItem, RssFeed};
 
 use crate::serde_utils::DynImageConverter;
+use crate::update::Source;
 use crate::{agent::memory::decision::material, update::Updatable};
 
 #[serde_as]
@@ -44,7 +45,7 @@ pub struct DefaultMetadata {
 pub trait Feed: Updatable {
     type Metadata: LlmComprehendable;
 
-    async fn get_metadata(&self) -> Result<Self::Metadata, <Self as Updatable>::Error>;
+    async fn get_metadata(&self) -> Result<Self::Metadata, <Self as Source>::Error>;
 }
 
 impl DefaultUpdate {

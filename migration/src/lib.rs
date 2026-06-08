@@ -11,11 +11,13 @@ mod m20260501_134800_add_bot_db_msg_id_by_dialog_id;
 mod m20260531_104434_add_bot_channel;
 mod m20260602_055534_add_bot_dialog_chat_id;
 mod m20260602_064052_change_bot_msg_id_by_dialog_id_pk;
+mod m20260607_041240_add_bot_broadcast;
 
 pub(crate) mod id_msg_id_by_dialog_id;
 pub(crate) mod id_notify;
 pub(crate) mod id_subscription;
 pub(crate) mod id_user;
+pub(crate) mod id_broadcast;
 
 pub struct Migrator;
 
@@ -42,6 +44,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260602_055534_add_bot_dialog_chat_id::Migration),
             #[cfg(feature = "bot")]
             Box::new(m20260602_064052_change_bot_msg_id_by_dialog_id_pk::Migration),
+            #[cfg(feature = "bot")]
+            Box::new(m20260607_041240_add_bot_broadcast::Migration),
         ]
     }
 }

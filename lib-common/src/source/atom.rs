@@ -1,4 +1,4 @@
-use std::{fmt::Display, hash::Hash, str::FromStr};
+use std::{collections::BTreeMap, fmt::Display, hash::Hash, str::FromStr};
 
 use futures::future;
 use reqwest::header::HeaderMap;
@@ -11,9 +11,10 @@ use tracing::{Instrument, Level, debug_span, event};
 use crate::{
     agent::memory::decision::material,
     source::{
-        DefaultMetadata, Feed, LlmComprehendable, SharedImageOrText, utils::{self, UrlContent}
+        DefaultMetadata, Feed, LlmComprehendable, SharedImageOrText,
+        utils::{self, UrlContent},
     },
-    update::Updatable,
+    update::{Source, Updatable},
 };
 
 pub struct AtomFeed {
@@ -87,7 +88,7 @@ impl AtomFeed {
     }
 }
 
-impl Updatable for AtomFeed {
+impl Source for AtomFeed {
     type Item = AtomFeedItem;
 
     type Error = Error;
@@ -96,7 +97,9 @@ impl Updatable for AtomFeed {
         let (_, items) = self.cache.read().await.clone().expect("call update first");
         Ok(items)
     }
+}
 
+impl Updatable for AtomFeed {
     async fn update(&self) -> Result<(), Self::Error> {
         let feed = self.get_feed().await?;
         let mut entries = feed.entries().iter().collect::<Vec<_>>();
@@ -116,7 +119,7 @@ impl Updatable for AtomFeed {
 impl Feed for AtomFeed {
     type Metadata = DefaultMetadata;
 
-    async fn get_metadata(&self) -> Result<Self::Metadata, <Self as Updatable>::Error> {
+    async fn get_metadata(&self) -> Result<Self::Metadata, <Self as Source>::Error> {
         let title = if let Some((cache, _)) = self.cache.read().await.as_ref() {
             cache.title().to_string()
         } else {
@@ -197,6 +200,85 @@ impl Display for AtomFeedItem {
 impl Hash for AtomFeedItem {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.title.hash(state); // effectively hashing name and url which is guid
+    }
+}
+
+impl Into<atom_syndication::Entry> for AtomFeedItem {
+    fn into(self) -> atom_syndication::Entry {
+        self.entry
+    }
+}
+
+impl Into<rss::Item> for AtomFeedItem {
+    fn into(self) -> rss::Item {
+        rss::ItemBuilder::default()
+            .title(self.title)
+            .guid(rss::Guid {
+                value: self.entry.id,
+                permalink: true,
+            })
+            .pub_date(self.entry.updated.to_rfc2822())
+            .description(self.entry.summary.map(|s| s.value))
+            .content(self.entry.content.and_then(|c| c.value))
+            .link(self.entry.links.first().map(|l| l.href().to_string()))
+            .author(
+                self.entry
+                    .authors
+                    .into_iter()
+                    .filter_map(|p| p.email)
+                    .collect::<Vec<_>>()
+                    .join(";"),
+            )
+            .categories(
+                self.entry
+                    .categories
+                    .into_iter()
+                    .map(|c| rss::Category {
+                        name: c.label.unwrap_or(c.term.clone()),
+                        domain: Some(c.term),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .source(self.entry.source.map(|s| {
+                rss::Source {
+                    url: s
+                        .links
+                        .first()
+                        .map(|l| l.href().to_string())
+                        .unwrap_or_default(),
+                    title: Some(s.title.value),
+                }
+            }))
+            .extensions(
+                self.entry
+                    .extensions
+                    .into_iter()
+                    .map(|(name, ele)| {
+                        (
+                            name,
+                            ele.into_iter()
+                                .map(|(name, exts)| {
+                                    (name, exts.into_iter().map(atom_ext_to_rss).collect())
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>(),
+            )
+            .build()
+    }
+}
+
+fn atom_ext_to_rss(atom: atom_syndication::extension::Extension) -> rss::extension::Extension {
+    rss::extension::Extension {
+        name: atom.name,
+        value: atom.value,
+        attrs: atom.attrs,
+        children: atom
+            .children
+            .into_iter()
+            .map(|(name, exts)| (name, exts.into_iter().map(atom_ext_to_rss).collect()))
+            .collect(),
     }
 }
 

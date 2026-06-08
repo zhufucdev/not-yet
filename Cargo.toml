@@ -37,6 +37,9 @@ async-stream = "0.3.6"
 ollama-rs = { git = "https://github.com/zhufucdev/ollama-rs.git", rev = "45de03b", features = [
 	"macros",
 ] }
+rss = { version = "2.0.13", features = ["serde", "atom"] }
+clap-verbosity-flag = { version = "3.0.4", features = ["tracing"] }
+serde_json = "1.0"
 
 [dependencies]
 lib-common = { path = "lib-common" }
@@ -51,3 +54,4 @@ default = ["dep:app-cli"]
 bot = ["dep:app-bot"]
 telegram = ["bot", "app-bot/telegram"]
 daemon = ["lib-common/daemon"]
+serve-rss = ["app-bot/serve-rss"]

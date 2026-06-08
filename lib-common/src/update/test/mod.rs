@@ -13,7 +13,7 @@ use tracing_test::traced_test;
 
 use crate::{
     source::{self, LlmRssItem, RssFeed},
-    update::{Updatable, UpdatePersistence, UpdateWakerExt},
+    update::{Source, Updatable, UpdatePersistence, UpdateWakerExt},
 };
 
 struct MockUpdateable(RefCell<Vec<u64>>);
@@ -34,14 +34,14 @@ async fn test_update_simple() {
     let source = MockUpdateable(RefCell::new(vec![1, 2, 3]));
     let persistence = DebugPersistence::default();
     let series = stream::once(async { Ok(()) })
-        .wake_update(&source, persistence.clone(), usize::MAX)
+        .wake_update(&source, &persistence, usize::MAX)
         .map_ok(|(num, _)| num.unwrap())
         .try_collect::<Vec<_>>()
         .await;
     assert_eq!(series.unwrap(), vec![1, 2, 3]);
 
     let series = stream::once(async { Ok(()) })
-        .wake_update(&source, persistence.clone(), usize::MAX)
+        .wake_update(&source, &persistence, usize::MAX)
         .map_ok(|(num, _)| num)
         .try_collect::<Vec<_>>()
         .await;
@@ -49,7 +49,7 @@ async fn test_update_simple() {
 
     source.0.borrow_mut().push(4);
     let series = stream::once(async { Ok(()) })
-        .wake_update(&source, persistence.clone(), usize::MAX)
+        .wake_update(&source, &persistence, usize::MAX)
         .map_ok(|(num, _)| num.unwrap())
         .try_collect::<Vec<_>>()
         .await;
@@ -57,7 +57,7 @@ async fn test_update_simple() {
 
     source.0.borrow_mut().clear();
     let series = stream::once(async { Ok(()) })
-        .wake_update(&source, persistence, usize::MAX)
+        .wake_update(&source, &persistence, usize::MAX)
         .map_ok(|(num, _)| num)
         .try_collect::<Vec<_>>()
         .await;
@@ -84,7 +84,7 @@ async fn test_hacker_news() {
             feed.update_from_channel(channel).await.unwrap();
             Ok(())
         })
-        .wake_update(&feed, DebugPersistence::default(), usize::MAX)
+        .wake_update(&feed, &DebugPersistence::default(), usize::MAX)
         .try_collect::<Vec<_>>()
         .await
         .unwrap();
@@ -143,7 +143,7 @@ where
 unsafe impl Send for MockUpdateable {}
 unsafe impl Sync for MockUpdateable {}
 
-impl Updatable for MockUpdateable {
+impl Source for MockUpdateable {
     type Item = u64;
 
     type Error = anyhow::Error;
@@ -151,7 +151,9 @@ impl Updatable for MockUpdateable {
     async fn get_items(&self) -> Result<Vec<Self::Item>, Self::Error> {
         Ok(self.0.borrow().clone())
     }
+}
 
+impl Updatable for MockUpdateable {
     async fn update(&self) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -172,7 +174,7 @@ impl MockRssFeed {
     }
 }
 
-impl Updatable for MockRssFeed {
+impl Source for MockRssFeed {
     type Item = LlmRssItem;
 
     type Error = source::rss::Error;
@@ -180,7 +182,9 @@ impl Updatable for MockRssFeed {
     async fn get_items(&self) -> Result<Vec<Self::Item>, Self::Error> {
         self.inner.get_items().await
     }
+}
 
+impl Updatable for MockRssFeed {
     async fn update(&self) -> Result<(), Self::Error> {
         Ok(())
     }

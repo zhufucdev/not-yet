@@ -12,58 +12,52 @@ use tokio::sync::RwLock;
 use crate::polling::error::TaskCancellationError;
 
 pub mod accept;
+mod persistence;
 pub mod sqlite;
 #[cfg(test)]
 mod test;
+mod updatable;
+
+pub use persistence::*;
+pub use updatable::*;
 
 #[trait_variant::make(Send)]
-pub trait UpdatePersistence: Unpin + Send + Sync + 'static {
-    type Item: Unpin + Send + Sync;
-    type Error: Send;
-    /// Mark an item as seen
-    async fn update(&self, item: Option<&Self::Item>) -> Result<(), Self::Error>;
-    /// If the given item is seen, return `true`, otherwise `false`
-    async fn cmp(&self, current: Option<&Self::Item>) -> Result<bool, Self::Error>;
-}
-
-#[trait_variant::make(Send)]
-pub trait Updatable {
+pub trait Source {
     type Item: Unpin + Send + Sync;
     type Error;
     async fn get_items(&self) -> Result<Vec<Self::Item>, Self::Error>;
-    async fn update(&self) -> Result<(), Self::Error>;
 }
 
 pub trait UpdateWakerExt<D> {
     fn wake_update<'s, I, P>(
         self,
         source: &'s I,
-        persistence: P,
+        persistence: &'s P,
         buffer_size: usize,
-    ) -> Update<'s, I, P, Self, D>
+    ) -> Update<'s, 's, I, P, Self, D>
     where
         I: Updatable,
         P: UpdatePersistence<Item = I::Item>,
-        <I as Updatable>::Item: Unpin + Send + Sync,
+        <I as Source>::Item: Unpin + Send + Sync,
         Self: Sized;
 }
 
 pin_project_lite::pin_project! {
-    pub struct Update<'f, I, P, W, D>
+    pub struct Update<'s, 'p, I, P, W, D>
     where
         I: Updatable,
         P: UpdatePersistence<Item = I::Item>,
     {
-        source: &'f I,
-        persistence: Arc<P>,
-        state: RefCell<UpdateState<'f, I::Item, I::Error, P::Error, D>>,
+        source: &'s I,
+        persistence: &'p P,
+        state: RefCell<UpdateState<'s, I::Item, I::Error, P::Error, D>>,
         #[pin]
         waker: W,
         buffer_size: usize,
     }
 }
 
-impl<'f, I, P, W, D> Stream for Update<'f, I, P, W, D>
+impl<'s, I, P, W, D> Stream for Update<'s, 's, I, P, W, D>
 where
     I: Updatable,
     P: UpdatePersistence<Item = I::Item>,
@@ -285,7 +279,7 @@ macro_rules! delegate_access_inner {
     }
 }
 
-impl<'f, I, P, W, D> Update<'f, I, P, W, D>
+impl<'f, I, P, W, D> Update<'f, 'f, I, P, W, D>
 where
     I: Updatable,
     P: UpdatePersistence<Item = I::Item>,
@@ -293,7 +287,7 @@ where
     W: Stream<Item = Result<D, TaskCancellationError>>,
     D: Clone,
 {
-    fn new_ref(source: &'f I, persistence: Arc<P>, waker: W, buffer_size: usize) -> Self {
+    fn new(source: &'f I, persistence: &'f P, waker: W, buffer_size: usize) -> Self {
         assert_stream(Update {
             source,
             persistence,
@@ -301,10 +295,6 @@ where
             waker,
             buffer_size,
         })
-    }
-
-    fn new(source: &'f I, persistence: P, waker: W, buffer_size: usize) -> Self {
-        Self::new_ref(source, Arc::new(persistence), waker, buffer_size)
     }
 
     delegate_access_inner!(waker, W, ());
@@ -318,13 +308,13 @@ where
     fn wake_update<'s, I, P>(
         self,
         source: &'s I,
-        persistence: P,
+        persistence: &'s P,
         buffer_size: usize,
-    ) -> Update<'s, I, P, Self, D>
+    ) -> Update<'s, 's, I, P, Self, D>
     where
         I: Updatable,
         P: UpdatePersistence<Item = I::Item>,
-        <I as Updatable>::Item: Unpin + Send + Sync,
+        <I as Source>::Item: Unpin + Send + Sync,
         Self: Sized,
     {
         Update::new(source, persistence, self, buffer_size)

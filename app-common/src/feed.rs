@@ -1,13 +1,12 @@
 use std::fmt::Display;
 
 use anyhow::anyhow;
-use futures::{Stream, StreamExt, TryStreamExt, future, stream};
+use futures::{Stream, TryStreamExt};
 use tracing::{Level, event};
 
 use lib_common::{
-    polling::{KeyContract, Scheduler, error::TaskCancellationError, task::Task},
-    source::Feed,
-    update::{self, UpdatePersistence, UpdateWakerExt},
+    polling::{KeyContract, Scheduler, task::Task},
+    update::{Source, Updatable, UpdatePersistence, UpdateWakerExt},
 };
 
 /// Generate an infinite stream (unless `key` was not present in `scheduler`)
@@ -15,15 +14,15 @@ use lib_common::{
 pub fn check<'f, Key, Item, FeedError, Feed_, PersistenceError, Persistence>(
     key: &'f Key,
     feed: &'f Feed_,
-    scheduler: &Scheduler<Key>,
-    persistence: Persistence,
+    scheduler: &'f Scheduler<Key>,
+    persistence: &'f Persistence,
     buffer_size: usize,
-) -> impl Stream<Item = anyhow::Result<(Option<Item>, Task<Key>)>>
+) -> impl Stream<Item = anyhow::Result<(Option<Item>, Task<Key>)>> + 'f
 where
     Key: KeyContract + Display,
     Item: Send + Sync + Unpin + 'static,
     FeedError: Display,
-    Feed_: Feed<Item = Item, Error = FeedError>,
+    Feed_: Updatable<Item = Item, Error = FeedError>,
     PersistenceError: Display,
     Persistence: UpdatePersistence<Item = Item, Error = PersistenceError>,
 {
