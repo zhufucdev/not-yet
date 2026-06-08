@@ -212,7 +212,7 @@ impl Into<atom_syndication::Entry> for AtomFeedItem {
 impl Into<rss::Item> for AtomFeedItem {
     fn into(self) -> rss::Item {
         rss::ItemBuilder::default()
-            .title(self.title)
+            .title(self.entry.title.value)
             .guid(rss::Guid {
                 value: self.entry.id,
                 permalink: true,
