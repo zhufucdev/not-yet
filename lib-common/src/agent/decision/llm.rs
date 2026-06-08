@@ -431,10 +431,7 @@ impl Tool for FetchUrl {
 
     async fn call(&mut self, parameters: Self::Params) -> SystemResult<String> {
         async move {
-            event!(
-                Level::DEBUG,
-                "parameters: {parameters:?}"
-            );
+            event!(Level::DEBUG, "parameters: {parameters:?}");
             let url = match Url::parse(&parameters.url) {
                 Ok(r) => r,
                 Err(err) => {
@@ -456,13 +453,16 @@ impl Tool for FetchUrl {
                         .get(reqwest::header::CONTENT_TYPE)
                         .and_then(|h| h.to_str().ok())
                     else {
-                        return Err(format!("this resource has no known content type, and you may retry with the `no_santize` flag to ignore").into());
+                        const MSG: &'static str = "this resource has no known content type, and you may retry with the `no_santize` flag to ignore";
+                        return SystemResult::Ok(ToolResult::Failure(MSG.into()).into());
                     };
                     event!(Level::DEBUG, "content type: {content_type}");
 
                     if !content_type.starts_with("text/") {
-                        return Err(
-                            format!("expect a text content type, got {content_type:?}").into()
+                        return SystemResult::Ok(
+                            ToolResult::Failure(
+                                format!("expect a text content type, got {content_type:?}").into()
+                            ).into()
                         );
                     }
                     let Some(text_type) = content_type
@@ -472,7 +472,7 @@ impl Tool for FetchUrl {
                         .and_then(|rem| rem.split(';').next())
                         .map(|t| t.trim())
                     else {
-                        return Err(format!("unknown content type: {content_type}").into());
+                        return SystemResult::Ok(ToolResult::Failure(format!("unknown content type: {content_type}").into()).into());
                     };
                     match text_type {
                         "plain" => Ok(res.text_with_charset("utf-8").await?.into()),
@@ -500,7 +500,7 @@ impl Tool for FetchUrl {
                 (Err(err), _) => {
                     event!(Level::WARN, "HTTP request failed: {err}");
                     Err(format!("HTTP reqest failed: {err}").into())
-                },
+                }
             };
             match content {
                 Ok(content) => {
