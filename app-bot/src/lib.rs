@@ -17,7 +17,7 @@ use app_common::{
     verbosity::WithVerbosity,
 };
 use clap::Parser;
-use futures::future::{self, BoxFuture};
+use futures::future;
 use lib_common::polling::Scheduler;
 #[cfg(feature = "telegram")]
 pub use telegram as flavor;
@@ -30,6 +30,7 @@ use crate::{config::Config, init::InitResult};
 
 macro_rules! assert_impls {
     ($trait:path, $value:ident) => {{
+        #[allow(dead_code)]
         struct AssertImpls<'s, T>(&'s T)
         where
             T: $trait;
